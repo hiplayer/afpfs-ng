@@ -224,10 +224,15 @@ int afp_main_loop(int command_fd) {
 				pthread_create(&ending_thread,NULL,just_end_it_now,NULL);
 			}
 		if (ret<0) {
+			printf("pselect done,ret:%d\n",ret);
+			printf("errno=%d\n",errno);
+			printf("strerror=%s\n",strerror(errno));
 			switch(errno) {
 			case EINTR:
-				deal_with_server_signals(&rds,&max_fd);
-				break;
+			case EAGAIN:
+				continue;
+				//deal_with_server_signals(&rds,&max_fd);
+				//break;
 			case EBADF:
 				if (fderrors > 100) {
 					log_for_client(NULL,AFPFSD,LOG_ERR,

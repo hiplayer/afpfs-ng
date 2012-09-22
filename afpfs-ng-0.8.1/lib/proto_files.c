@@ -6,8 +6,11 @@
  *
  */
 
+#define __STDC_FORMAT_MACROS
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
+#include <stdio.h>
 #include "dsi.h"
 #include "afp.h"
 #include "utils.h"
@@ -179,7 +182,6 @@ int afp_delete(struct afp_volume * volume,
 	return ret;
 }
 
-
 int afp_read(struct afp_volume * volume, unsigned short forkid, 
 		uint32_t offset, 
 		uint32_t count,
@@ -252,6 +254,8 @@ int afp_readext(struct afp_volume * volume, unsigned short forkid,
 	readext_packet.forkrefnum=htons(forkid);
 	readext_packet.offset=hton64(offset);
 	readext_packet.reqcount=hton64(count);
+	//printf("readext_packet.offset : %" PRIu64 "\t", offset);
+	//printf("readext_packet.reqcount : %" PRIu64 "\n", count);
 	rc=dsi_send(volume->server, (char *) &readext_packet,
 		sizeof(readext_packet), DSI_DEFAULT_TIMEOUT, 
 		afpReadExt, (void *) rx);

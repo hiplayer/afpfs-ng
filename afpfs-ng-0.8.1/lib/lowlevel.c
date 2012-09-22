@@ -268,6 +268,7 @@ int ll_open(struct afp_volume * volume, const char *path, int flags,
 
 
 try_again:
+	fp->flags = flags;
 	dsi_ret=afp_openfork(volume,fp->resource?1:0,fp->did,
 		aflags,fp->basename,fp);
 
@@ -311,7 +312,6 @@ try_again:
 		goto error;
 	}
 
-	add_opened_fork(volume, fp);
 
 	if ((flags & O_TRUNC) && (!create_file)) {
 
@@ -342,24 +342,25 @@ int ll_read(struct afp_volume * volume,
 	struct afp_rx_buffer buffer;
 	size_t amount_copied;
 
+try_again:
 	*eof=0;
 
 	buffer.data = buf;
 	buffer.maxsize=bufsize;
 	buffer.size=0;
 	/* Lock the range */
-	if (ll_handle_locking(volume, fp->forkid,offset,size)) {
+	if (ll_handle_locking(volume, fp->forkid,offset,bufsize)) {
 		/* There was an irrecoverable error when locking */
 		ret=EBUSY;
 		goto error;
 	}
 
 	if (volume->server->using_version->av_number < 30)
-		rc=afp_read(volume, fp->forkid,offset,size,&buffer);
+		rc=afp_read(volume, fp->forkid,offset,bufsize,&buffer);
 	else
-		rc=afp_readext(volume, fp->forkid,offset,size,&buffer);
+		rc=afp_readext(volume, fp->forkid,offset,bufsize,&buffer);
 
-	if (ll_handle_unlocking(volume, fp->forkid,offset,size)) {
+	if (ll_handle_unlocking(volume, fp->forkid,offset,bufsize)) {
 		/* Somehow, we couldn't unlock the range. */
 		ret=EIO;
 		goto error;
@@ -380,6 +381,13 @@ int ll_read(struct afp_volume * volume,
 		break;
 	case kFPNoErr:
 		break;
+	case -ETIMEDOUT:
+		ret = ll_open(volume,NULL,fp->flags,fp);
+		if(ret == 0){
+			goto try_again;
+		}else{
+			return ret;
+		}
 	}
 
 	bytesleft-=buffer.size;

@@ -370,6 +370,75 @@ static unsigned char process_ping(struct fuse_client * c)
 	return AFP_SERVER_RESULT_OKAY;
 }
 
+static unsigned char process_get_volumes(struct fuse_client * c)
+{
+	struct afp_server_mount_request * req;
+	struct afp_server  * s=NULL;
+	struct afp_connection_request conn_req;
+	struct stat lstat;
+	int i;
+	FILE *fp = NULL;
+
+	unlink("/tmp/get_afp_volume_list");
+	if ((c->incoming_size-1) < sizeof(struct afp_server_mount_request)) 
+		goto error;
+
+	req=(void *) c->incoming_string+1;
+
+	/* Todo should check the existance and perms of the mount point */
+
+	if (stat(FUSE_DEVICE,&lstat)) {
+		printf("Could not find %s\n",FUSE_DEVICE);
+		goto error;
+	}
+
+	if (access(FUSE_DEVICE,R_OK | W_OK )!=0) {
+		log_for_client((void *)c, AFPFSD,LOG_NOTICE, 
+			"Incorrect permissions on %s, mode of device"
+			" is %o, uid/gid is %d/%d.  But your effective "
+			"uid/gid is %d/%d\n", 
+				FUSE_DEVICE,lstat.st_mode, lstat.st_uid, 
+				lstat.st_gid, 
+				geteuid(),getegid());
+		goto error;
+	}
+
+	memset(&conn_req,0,sizeof(conn_req));
+
+	conn_req.url=req->url;
+	conn_req.uam_mask=req->uam_mask;
+
+	if ((s=afp_server_full_connect(c,&conn_req))==NULL) {
+		signal_main_thread();
+		goto error;
+	}
+
+	fp = fopen("/tmp/get_afp_volume_list", "wb+");
+	if(!fp) {
+		log_for_client((void *)c, AFPFSD,LOG_NOTICE, "It's fail to create /tmp/get_afp_volume_list\n");
+	}
+	
+	for (i=0;i<s->num_volumes;i++)  {
+		fprintf(fp, "%s\n", s->volumes[i].volume_name_printable);
+		printf("%s[%d], volume:[%s]\n", __FILE__, __LINE__, s->volumes[i].volume_name_printable);
+	}
+
+	fclose(fp);
+
+	if ((s) && (!something_is_mounted(s))) {
+		afp_server_remove(s);
+	}
+	signal_main_thread();
+	return 0;
+
+error:
+	if ((s) && (!something_is_mounted(s))) {
+		afp_server_remove(s);
+	}
+	signal_main_thread();
+	return AFP_SERVER_RESULT_ERROR;
+}
+
 static unsigned char process_exit(struct fuse_client * c)
 {
 	log_for_client((void *)c,AFPFSD,LOG_INFO,
@@ -575,6 +644,9 @@ static void * process_command_thread(void * other)
 		break;
 	case AFP_SERVER_COMMAND_PING: 
 		ret=process_ping(c);
+		break;
+	case AFP_SERVER_COMMAND_GET_VOLUMES:
+		ret=process_get_volumes(c);
 		break;
 	case AFP_SERVER_COMMAND_EXIT: 
 		ret=process_exit(c);

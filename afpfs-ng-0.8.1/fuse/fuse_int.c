@@ -24,11 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#ifdef __linux__
-#include <asm/fcntl.h>
-#else
 #include <fcntl.h>
-#endif
 
 #include <utime.h>
 #include <stdlib.h>
@@ -173,10 +169,6 @@ static int fuse_release(const char * path, struct fuse_file_info * fi)
 
 	ret=ml_close(volume,path,fp);
 
-	if (ret<0) goto error;
-
-	return ret;
-error:
 	free((void *) fi->fh);
 	return ret;
 }
@@ -189,7 +181,7 @@ static int fuse_open(const char *path, struct fuse_file_info *fi)
 	struct afp_volume * volume=
 		(struct afp_volume *)
 		((struct fuse_context *)(fuse_get_context()))->private_data;
-	unsigned char flags = AFP_OPENFORK_ALLOWREAD;
+	unsigned char flags = fi->flags;
 
 	log_fuse_event(AFPFSD,LOG_DEBUG,
 		"*** Opening path %s\n",path);
@@ -250,14 +242,15 @@ static int fuse_read(const char *path, char *buf, size_t size, off_t offset,
 		((struct fuse_context *)(fuse_get_context()))->private_data;
 	int eof;
 	size_t amount_read=0;
-
-	if (!fi || !fi->fh) 
-		return -EBADF;
-	fp=(void *) fi->fh;
-
 	while (1) {
+		if (!fi || !fi->fh) 
+			return -EBADF;
+		fp=(void *) fi->fh;
 		ret = ml_read(volume,path,buf+amount_read,size,offset,fp,&eof);
-		if (ret<0) goto error;
+		if(ret<0){
+			printf("ret=%d\n",ret);
+			goto error;
+		}
 		amount_read+=ret;
 		if (eof) goto out;
 		size-=ret;

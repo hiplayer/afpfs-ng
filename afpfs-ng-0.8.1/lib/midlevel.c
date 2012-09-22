@@ -254,6 +254,8 @@ int ml_open(struct afp_volume * volume, const char *path, int flags,
 
 	if (ret<0) goto error;
 
+	add_opened_fork(volume, fp);
+
 
 out:
 	return 0;
@@ -401,6 +403,12 @@ int ml_read(struct afp_volume * volume, const char *path,
 	char converted_path[AFP_MAX_PATH];
 	struct afp_rx_buffer buffer;
 	size_t amount_copied=0;
+	off_t read_offset = 0;
+	size_t read_size = 0;
+	int read_eof = 0;
+	char* read_buf = NULL;
+	int read_cnt = 0;
+	int copy_cnt = 0;
 
 	*eof=0;
 
@@ -416,9 +424,49 @@ int ml_read(struct afp_volume * volume, const char *path,
 		if (ret==1) return amount_copied;
 		
 	}
+//	printf("size=%d\n",size);
 
-	ret=ll_read(volume,buf,size,offset,fp,eof);
-
+	read_buf    = buf;
+	read_offset = offset;
+	read_size   = size;
+	read_eof    = 0;
+	read_cnt    = 0;
+	while(read_size > 0){	
+		if(fp->cache_eof!=0
+				&& fp->cache_offset + fp->cache_size <= read_offset){
+			/*Does EOF occur*/
+			/*Have I read all the data from the cache*/
+			fp->cache_eof=0;
+			*eof=1;
+			break;
+		}
+		if( fp->cache_offset<=read_offset
+				&& fp->cache_offset+fp->cache_size>read_offset){
+			/*hit cache*/
+			copy_cnt = min(read_size,fp->cache_size + (fp->cache_offset - read_offset));
+			memcpy(read_buf,fp->cache_buf+read_offset-fp->cache_offset,copy_cnt);
+			read_offset += copy_cnt;
+			read_buf    += copy_cnt;
+			read_cnt    += copy_cnt;
+			read_size   -= copy_cnt;
+		}else{
+			/*miss*/
+			ret=ll_read(volume,fp->cache_buf,MAX_CACHE_SIZE,read_offset,fp,&read_eof);
+			if(ret<0){
+				goto error;
+			}else{
+				fp->cache_offset = read_offset;
+				fp->cache_eof    = read_eof;
+				fp->cache_size   = ret;
+			}
+		}
+	}
+	ret = read_cnt;
+	return ret;
+error:
+	fp->cache_offset = 0;
+	fp->cache_size   = 0;
+	fp->cache_eof    = 0;
 	return ret;
 }
 

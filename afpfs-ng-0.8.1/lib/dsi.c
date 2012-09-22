@@ -30,6 +30,38 @@
 
 /* define this in order to get reams of DSI debugging information */
 #undef DEBUG_DSI
+static int
+readt(int fd,char *data,int total){
+	int sr=-1, nb_read,len;
+	fd_set rset;
+	struct timeval tv;
+
+	nb_read = 0;
+	len = 0;
+	FD_ZERO (&rset);
+	FD_SET (fd, &rset);
+	tv.tv_sec = 2;
+	tv.tv_usec = 0;
+	do{
+		sr = select (fd + 1, &rset, NULL, NULL, &tv);
+		if (sr == -1) {
+			if (errno == EINTR){
+				continue;
+			}
+			return -1;
+		}else if (sr == 0) {
+			return -1;
+		}else if (sr) {
+			if (FD_ISSET (fd, &rset)) {
+				if ((nb_read = read (fd, data, total)) < 0) {
+					return -1;
+				}
+				len = len + nb_read;
+			}
+		}
+	}while(0);
+	return len;
+}
 
 static int dsi_remove_from_request_queue(struct afp_server *server,
 	struct dsi_request *toremove);
@@ -51,6 +83,31 @@ void dsi_setup_header(struct afp_server * server, struct dsi_header * header, ch
 
 	header->command = command;
 
+}
+void dsi_dec_header(struct afp_server * server, struct dsi_header * header) 
+{
+
+	pthread_mutex_lock(&server->requestid_mutex);
+	if (server->lastrequestid == 0) server->lastrequestid = 65535;
+	else server->lastrequestid--;
+	server->expectedrequestid = server->lastrequestid;
+
+	pthread_mutex_unlock(&server->requestid_mutex);
+
+	header->requestid = htons(server->lastrequestid);
+}
+
+void dsi_inc_header(struct afp_server * server, struct dsi_header * header) 
+{
+
+	pthread_mutex_lock(&server->requestid_mutex);
+	if (server->lastrequestid == 65535) server->lastrequestid = 0;
+	else server->lastrequestid++;
+	server->expectedrequestid = server->lastrequestid;
+
+	pthread_mutex_unlock(&server->requestid_mutex);
+
+	header->requestid = htons(server->lastrequestid);
 }
 
 int dsi_getstatus(struct afp_server * server)
@@ -75,8 +132,8 @@ int dsi_sendtickle(struct afp_server *server)
 {
 	struct dsi_header  header;
 	dsi_setup_header(server,&header,DSI_DSITickle);
-	dsi_send(server,(char *) &header,sizeof(struct dsi_header),1,
-		DSI_DONT_WAIT,NULL);
+	dsi_send(server,(char *) &header,sizeof(struct dsi_header),
+		DSI_DONT_WAIT,0,NULL);
 	return 0;
 }
 
@@ -96,7 +153,7 @@ int dsi_opensession(struct afp_server *server)
 	dsi_opensession_header.rx_quantum=htonl(server->attention_quantum);
 
 	dsi_send(server,(char *) &dsi_opensession_header,
-		sizeof(dsi_opensession_header),1,DSI_BLOCK_TIMEOUT,NULL);
+		sizeof(dsi_opensession_header),DSI_BLOCK_TIMEOUT,0,NULL);
 	return 0;
 }
 
@@ -164,9 +221,174 @@ static int dsi_remove_from_request_queue(struct afp_server *server,
 		"Got an unknown reply for requestid %i\n",ntohs(toremove->requestid));
 	return -1;
 }
+int dsi_send_buffer(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other){
 
+	pthread_mutex_lock(&server->send_mutex);
+	if (write(server->fd,msg,size)<0) {
+		if ((errno==EPIPE) || (errno==EBADF)) {
+			/* The server has closed the connection */
+			server->connect_state=SERVER_STATE_DISCONNECTED;
+			return -1;
 
-int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other) 
+		}
+		perror("writing to server");
+		pthread_mutex_unlock(&server->send_mutex);
+		return -1;
+	}
+	server->stats.tx_bytes+=size;
+	pthread_mutex_unlock(&server->send_mutex);
+	return 0;
+}
+int dsi_add_request(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other,struct dsi_request **out){
+	struct dsi_request * new_request, *p;
+	/* Add request to the queue */
+	if (!(new_request=malloc(sizeof(struct dsi_request)))) {
+		log_for_client(NULL,AFPFSD,LOG_ERR,
+			"Could not allocate for new request\n");
+		return -1;
+	}
+	memset(new_request,0,sizeof(struct dsi_request));
+	new_request->requestid=server->lastrequestid;
+	//printf("new_request->requestid:%d\t",server->lastrequestid);
+	new_request->subcommand=subcommand;
+	new_request->other=other;
+	new_request->wait=wait;
+	new_request->next=NULL;
+	pthread_mutex_lock(&server->request_queue_mutex);
+	if (server->command_requests==NULL) {
+		server->command_requests=new_request;
+	} else {
+		for (p=server->command_requests;p->next;p=p->next);
+		p->next=new_request;
+	}
+	server->stats.requests_pending++;
+	pthread_mutex_unlock(&server->request_queue_mutex);
+
+	pthread_cond_init(&new_request->condition_cond,NULL);
+	*out=new_request;
+	return 0;
+}
+
+int dsi_wait_request(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other,struct dsi_request *in){
+	struct dsi_request * new_request;
+	int tmpwait=wait;
+	struct timespec ts;
+	struct timeval tv;
+	int rc = 0;
+
+	new_request=in;
+	if (tmpwait<0) {
+
+		pthread_mutex_t     mutex = PTHREAD_MUTEX_INITIALIZER;
+		pthread_mutex_lock(&mutex);
+
+		/* Wait forever */
+		#ifdef DEBUG_DSI
+		printf("=== Waiting forever for %d, %s\n",
+			new_request->requestid,
+			afp_get_command_name(new_request->subcommand));
+		#endif
+
+		rc=pthread_cond_wait( 
+			&new_request->condition_cond, 
+				&mutex );
+		pthread_mutex_unlock(&mutex);
+
+	} else if (tmpwait>0) {
+		pthread_mutex_t     mutex = PTHREAD_MUTEX_INITIALIZER;
+		pthread_mutex_lock(&mutex);
+
+		#ifdef DEBUG_DSI
+		printf("=== Waiting for %d %s, for %ds\n",
+			new_request->requestid,
+			afp_get_command_name(new_request->subcommand),
+			new_request->wait);
+		#endif
+
+		gettimeofday(&tv,NULL);
+		ts.tv_sec=tv.tv_sec;
+		ts.tv_sec+=wait;
+		ts.tv_nsec=tv.tv_usec *1000;
+		if (new_request->wait==0) {
+			#ifdef DEBUG_DSI
+			printf("=== Changing my mind, no longer waiting for %d\n",
+				new_request->requestid);
+			#endif
+			pthread_mutex_unlock(&mutex);
+			goto skip;
+		}
+		rc=pthread_cond_timedwait( 
+			&new_request->condition_cond, 
+			&mutex,&ts);
+		pthread_mutex_unlock(&mutex);
+		if (rc==ETIMEDOUT) {
+/* FIXME: should handle this case properly */
+			#ifdef DEBUG_DSI
+			printf("=== Timedout for %d\n",
+				new_request->requestid);
+			#endif
+			rc=-ETIMEDOUT;
+			goto out;
+		}
+	} else {
+		#ifdef DEBUG_DSI
+		printf("=== Skipping wait altogether for %d\n",new_request->requestid);
+		#endif
+	}
+	#ifdef DEBUG_DSI
+	printf("=== Done waiting for %d %s, waiting for %ds,"
+		" return %d, DSI return %d\n",
+		new_request->requestid,
+		afp_get_command_name(new_request->subcommand),
+		new_request->wait, 
+		rc,new_request->return_code);
+	#endif
+skip:
+	rc=new_request->return_code;
+out:
+	dsi_remove_from_request_queue(server,new_request);
+	return rc;
+}
+
+int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other){
+	struct dsi_header  *header = (struct dsi_header *) msg;
+	struct dsi_request * new_request = NULL;
+	int rc=0;
+ 	header->length=htonl(size-sizeof(struct dsi_header));
+	if (!server_still_valid(server) || server->fd==0)
+		return -1;
+
+	dsi_dec_header(server,header);
+	afp_wait_for_started_loop();
+	do{
+		if (server->connect_state==SERVER_STATE_DISCONNECTED) {
+			char mesg[1024];
+			unsigned int l=0; 
+			/* Try and reconnect */
+			printf("try and reconnect\n");
+
+			afp_server_reconnect(server,mesg,&l,1024);
+		}
+		dsi_inc_header(server,header);
+		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
+		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
+		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
+		if(rc<0){
+			printf("header->command:%d\t",header->command);
+			printf("header->requestid:%d\t",ntohs(header->requestid));
+			printf("dsi_wait_request subcommand=%d\t",subcommand);
+			printf("dsi_wait_request rc=%d\n",rc);
+		}
+		if(rc==-ETIMEDOUT){
+			server->data_read=0;
+			loop_disconnect(server);
+		}
+	}while(subcommand!=afpReadExt&&rc==-ETIMEDOUT);
+
+	return rc;
+} 
+
+int dsi_send_ex(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other) 
 {
 	/* For wait:
 	 * -1: wait forever
@@ -214,10 +436,9 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 		char mesg[1024];
 		unsigned int l=0; 
 		/* Try and reconnect */
+		printf("try and reconnect\n");
 
 		afp_server_reconnect(server,mesg,&l,1024);
-
-
 	}
 
 	pthread_mutex_lock(&server->send_mutex);
@@ -558,8 +779,8 @@ void dsi_incoming_tickle(struct afp_server * server)
 	struct dsi_header  header;
 
 	dsi_setup_header(server,&header,DSI_DSITickle);
-	dsi_send(server,(char *) &header,sizeof(struct dsi_header),0,
-		DSI_DONT_WAIT,NULL);
+	dsi_send(server,(char *) &header,sizeof(struct dsi_header),
+		DSI_DONT_WAIT,0,NULL);
 
 }
 
@@ -638,7 +859,7 @@ struct dsi_request * dsi_find_request(struct afp_server *server,
 
 	return NULL;
 }
-
+static int error_count = 0;
 int dsi_recv(struct afp_server * server) 
 {
 	struct dsi_header * header = (void *) server->incoming_buffer;
@@ -654,12 +875,18 @@ int dsi_recv(struct afp_server * server)
 		#endif
 		ret = read(server->fd,server->incoming_buffer+server->data_read,
 			amount_to_read);
+		error_count++;
+		//if(error_count%100==0){
+		//	printf("error_count:%d\n",error_count);
+		//}
+
+		//if (ret<0||error_count%201==0) {
 		if (ret<0) {
 			perror("dsi_recv");
-			return -1;
+			goto error;
 		}
 		if (ret==0) {
-			return -1;
+			goto error;
 		}
 		server->stats.rx_bytes+=ret;
 		server->data_read+=ret;
@@ -710,10 +937,10 @@ gotenough:
 		ret = read(server->fd,buf->data+buf->size,
 			newmax);
 		if (ret<0) {
-			return -1;
+			goto error;
 		}
 		if (ret==0) {
-			return -1;
+			goto error;
 		}
 		server->stats.rx_bytes+=ret;
 		buf->size+=ret;
@@ -759,9 +986,11 @@ gotenough:
 		ret = read(server->fd, (void *)
 		(((unsigned int) server->incoming_buffer)+server->data_read),
 			amount_to_read);
-		if (ret<0) return -1;
+		if (ret<0){
+			goto error;
+		}
 		if (ret==0) {
-			return -1;
+			goto error;
 		}
 		server->stats.rx_bytes+=ret;
 		server->data_read+=ret;
@@ -797,7 +1026,9 @@ process_packet:
 	case DSI_DSIWrite:
 	case DSI_DSICommand:
 		if (!runt_packet) 
-		dsi_command_reply(server, request->subcommand,request->other);
+		if(dsi_command_reply(server, request->subcommand,request->other)==-1){
+			goto error;
+		}
 		break;
 	case DSI_DSIAttention:
 		{
@@ -870,6 +1101,7 @@ out:
 	}
 	return 0;
 error:
+	server->data_read=0;
 	#ifdef DEBUG_DSI
 	printf("returning from dsi_recv with an error\n");
 	#endif

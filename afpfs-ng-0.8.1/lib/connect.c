@@ -75,7 +75,6 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 				"Could not connect, %s\n",strerror(-ret));
 		}
 		afp_server_remove(tmpserver);
-		afp_server_remove(tmpserver);
 		goto error;
 	}
 	loop_disconnect(tmpserver);
@@ -106,6 +105,7 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 				strerror(errno));
 			goto error;
 		}
+	printf("afp_server_complete_connnection\n");
 
 		if ((afp_server_complete_connection(priv,
 			s,&address,(unsigned char *) &versions,uams,

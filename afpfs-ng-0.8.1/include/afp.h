@@ -51,10 +51,18 @@ struct afp_rx_buffer {
 	int errorcode;
 };
 
+#define MAX_CACHE_SIZE (128)*(1024)
+struct cache_data_{
+	off_t cache_offset;
+	size_t cache_size;
+	int cache_eof;
+	unsigned char cache_buf[MAX_CACHE_SIZE];
+};
 
 struct afp_file_info {
 	unsigned short attributes;
 	unsigned int did;
+	unsigned int flags;
 	unsigned int creation_date;
 	unsigned int modification_date;
 	unsigned int backup_date;
@@ -76,7 +84,12 @@ struct afp_file_info {
 	unsigned short forkid;
 	struct afp_icon * icon;
 	int eof;
+	struct cache_data_ cache_data;
 };
+#define cache_offset cache_data.cache_offset
+#define cache_size cache_data.cache_size
+#define cache_eof cache_data.cache_eof
+#define cache_buf cache_data.cache_buf 
 
 
 #define VOLUME_EXTRA_FLAGS_VOL_CHMOD_KNOWN 0x1

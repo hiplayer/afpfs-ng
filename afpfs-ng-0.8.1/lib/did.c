@@ -12,7 +12,7 @@
 #include "afp.h"
 #include "afp_protocol.h"
 
-#undef DID_CACHE_DISABLE
+#define DID_CACHE_DISABLE
 
 static unsigned short timeout=10;
 

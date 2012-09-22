@@ -61,8 +61,8 @@ static int start_afpfsd(void)
 			snprintf(filename, PATH_MAX,
 				"/usr/local/bin/%s",AFPFSD_FILENAME);
 			if (access(filename,X_OK)) {
-				snprintf(filename, "/usr/bin/%s",
-					AFPFSD_FILENAME);
+				snprintf(filename, PATH_MAX,
+				"/usr/bin/%s", AFPFSD_FILENAME);
 				if (access(filename,X_OK)) {
 					printf("Could not find server (%s)\n",
 						filename);
@@ -76,7 +76,7 @@ static int start_afpfsd(void)
 				/* Try the path of afp_client */
 				char newpath[PATH_MAX];
 				snprintf(newpath,PATH_MAX,"%s/%s",
-					basename(thisbin),AFPFSD_FILENAME);
+					dirname(thisbin),AFPFSD_FILENAME);
 				if (execvp(newpath,argv)) {
 					perror("Starting up afpfsd\n");
 					return -1;
@@ -97,7 +97,7 @@ static int daemon_connect(void)
 	int sock;
 	struct sockaddr_un servaddr;
 	char filename[PATH_MAX];
-	unsigned char trying=2;
+	unsigned char trying=4;
 
 	if ((sock=socket(AF_UNIX,SOCK_STREAM,0)) < 0) {
 		perror("Could not create socket\n");
@@ -367,6 +367,42 @@ static int do_mount(int argc, char ** argv)
         return 0;
 }
 
+static int do_get_volumes(int argc,char **argv)
+{
+	struct afp_server_mount_request * req = (void *) outgoing_buffer+1;
+	unsigned int uam_mask=default_uams_mask();
+	char * urlstring;
+
+	urlstring=argv[2];
+
+	outgoing_len=sizeof(struct afp_server_mount_request)+1;
+	memset(outgoing_buffer,0,outgoing_len);
+
+	afp_default_url(&req->url);
+
+	req->changeuid=changeuid;
+
+	outgoing_buffer[0]=AFP_SERVER_COMMAND_GET_VOLUMES;
+	req->map=AFP_MAPPING_UNKNOWN;
+	if (afp_parse_url(&req->url,urlstring,0) !=0) 
+	{
+		printf("Could not parse URL\n");
+		return -1;
+	}
+	if (strcmp(req->url.username, "guest") == 0) {
+		uam_mask = UAM_NOUSERAUTHENT;
+	}
+	if (strcmp(req->url.password,"-")==0) {
+		char *p = getpass("AFP Password: ");
+		if (p)
+			snprintf(req->url.password,AFP_MAX_PASSWORD_LEN,"%s",p);
+	}
+
+	req->uam_mask=uam_mask;
+
+	return 0;
+}
+
 static void mount_afp_usage(void)
 {
 	printf("Usage:\n     mount_afp [-o volpass=password] <afp url> <mountpoint>\n");
@@ -493,6 +529,8 @@ static int prepare_buffer(int argc, char * argv[])
 
 	} else if (strncmp(argv[1],"unmount",7)==0) {
 		return do_unmount(argc,argv);
+	} else if (strncmp(argv[1], "get_volumes", 12)==0) {
+		return do_get_volumes(argc,argv);
 	} else if (strncmp(argv[1],"exit",4)==0) {
 		return do_exit(argc,argv);
 

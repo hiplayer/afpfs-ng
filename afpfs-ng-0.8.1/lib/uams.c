@@ -68,7 +68,7 @@ char uam_names_list[UAMS_MAX_NAMES_LIST];
 
 unsigned int default_uams_mask(void)
 {
-	unsigned int uam_mask=UAM_CLEARTXTPASSWRD ;
+	unsigned int uam_mask=UAM_NOUSERAUTHENT|UAM_CLEARTXTPASSWRD ;
 
 #ifdef HAVE_LIBGCRYPT
         uam_mask|=UAM_RANDNUMEXCHANGE|UAM_2WAYRANDNUM;

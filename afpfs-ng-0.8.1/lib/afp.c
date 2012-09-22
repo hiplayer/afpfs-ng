@@ -20,6 +20,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include "afp_protocol.h"
 #include "libafpclient.h"
@@ -170,6 +172,14 @@ int server_still_valid(struct afp_server * server)
 
 static void add_server(struct afp_server *newserver)
 {
+	struct afp_server * s;
+
+	for (s=server_base;s;s=s->next) {
+	    if (s == newserver) {
+	        printf("!!! Server exist!!! Do not add again!!!!!!!\n");
+	        return;
+	    }
+	}
         newserver->next=server_base;
         server_base=newserver;
 }
@@ -354,7 +364,7 @@ struct afp_server * afp_server_init(struct sockaddr_in * address)
 	s->exit_flag = 0;
 	s->path_encoding=kFPUTF8Name;  /* This is a default */
 	s->next=NULL;
-	s->bufsize=2048;
+	s->bufsize=1<<18;
 	s->incoming_buffer=malloc(s->bufsize);
 
 	s->attention_quantum=AFP_DEFAULT_ATTENTION_QUANTUM;
@@ -595,6 +605,7 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
 	int i;
 	struct afp_volume * v;
 
+	printf("afp_server_reconnect start\n");
         if (afp_server_connect(s,0))  {
 		*l+=snprintf(mesg,max-*l,"Error resuming connection to %s\n",
 			s->server_name_printable);
@@ -614,6 +625,7 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
 					v->volume_name_printable);
                 }
         }
+	printf("afp_server_reconnect end\n");
 
         return 0;
 }
@@ -641,6 +653,9 @@ int afp_server_connect(struct afp_server *server, int full)
 	add_server(server);
 
 	add_fd_and_signal(server->fd);
+
+	int flags = fcntl (server->fd, F_GETFL, 0);
+	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
 
 	if (!full) {
 		return 0;
