@@ -399,6 +399,119 @@ error:
 }
 
 
+int ll_readdir_ex(struct afp_volume * volume, const char *path, 
+	struct afp_file_info **fb, int resource,unsigned long startindex,unsigned long *getcnt,int *eof)
+{
+	struct afp_file_info * p, * filebase=NULL, *base, *last;
+	unsigned short reqcount=20;  /* Get them in batches of 20 */
+	unsigned short getcount = 0;
+	int rc=0, ret=0, exit=0;
+	unsigned int filebitmap, dirbitmap;
+	char basename[AFP_MAX_PATH];
+	char converted_name[AFP_MAX_PATH];
+	unsigned int dirid;
+
+
+	if (invalid_filename(volume->server,path)) 
+		return -ENAMETOOLONG;
+
+	if (get_dirid(volume, path, basename, &dirid)<0)
+		return -ENOENT;
+
+	/* We need to handle length bits differently for AFP < 3.0 */
+
+	filebitmap=kFPAttributeBit | kFPParentDirIDBit |
+		kFPCreateDateBit | kFPModDateBit |
+		kFPBackupDateBit|
+		kFPNodeIDBit;
+	dirbitmap=kFPAttributeBit | kFPParentDirIDBit |
+		kFPCreateDateBit | kFPModDateBit |
+		kFPBackupDateBit|
+		kFPNodeIDBit | kFPOffspringCountBit|
+		kFPOwnerIDBit|kFPGroupIDBit;
+	if (volume->extra_flags & VOLUME_EXTRA_FLAGS_VOL_SUPPORTS_UNIX) {
+		dirbitmap|=kFPUnixPrivsBit;
+		filebitmap|=kFPUnixPrivsBit;
+	}
+
+	if (volume->attributes & kSupportsUTF8Names ) {
+		dirbitmap|=kFPUTF8NameBit;
+		filebitmap|=kFPUTF8NameBit;
+	} else {
+		dirbitmap|=kFPLongNameBit| kFPShortNameBit;
+		filebitmap|=kFPLongNameBit| kFPShortNameBit;
+	}
+	if (volume->server->using_version->av_number<30) {
+		filebitmap |=(resource ? kFPRsrcForkLenBit:kFPDataForkLenBit);
+	} else {
+		filebitmap |=(resource ? kFPRsrcForkLenBit:kFPExtDataForkLenBit);
+	}
+
+
+	/* FIXME: check AFP version */
+	/* this function will allocate and generate a linked list 
+	   of files */
+	if (volume->server->using_version->av_number<30) {
+		rc = afp_enumerate(volume,dirid,
+				filebitmap, dirbitmap,reqcount,
+				startindex,basename,&base);
+	} else {
+		rc = afp_enumerateext2(volume,dirid,
+				filebitmap, dirbitmap,reqcount,
+				startindex,basename,&base);
+	}
+
+	switch(rc) {
+		case -1:
+			ret=EIO;
+			goto error;
+		case 0:
+		case kFPObjectNotFound:
+			if (filebase==NULL) filebase=base;
+			else last->next=base;
+			for (p=base; p; p=p->next) {
+				getcount++;
+			}
+			if (rc==kFPObjectNotFound) *eof=1;
+			break;
+		case kFPAccessDenied:
+			ret=EACCES;
+			goto error;
+		case kFPDirNotFound:
+			ret=ENOENT;
+			exit++;
+			break;
+		case kFPBitmapErr:
+		case kFPMiscErr:
+		case kFPObjectTypeErr:
+		case kFPParamErr:
+		case kFPCallNotSupported:
+			ret=EIO;
+			goto error;
+	}
+
+	for (p=filebase; p; p=p->next) {
+		/* Convert all the names back to precomposed */
+		convert_path_to_unix(
+			volume->server->path_encoding, 
+			converted_name,p->name, AFP_MAX_PATH);
+		startindex++;
+	}
+
+	if (volume->server->using_version->av_number<30) {
+		for (p=filebase; p; p=p->next) {
+			set_nonunix_perms(&p->unixprivs.permissions, p);
+		}
+	}
+
+	*fb=filebase;
+	*getcnt=getcount;
+
+	return 0;
+error:
+	return -ret;
+
+}
 
 
 int ll_readdir(struct afp_volume * volume, const char *path, 
@@ -642,7 +755,7 @@ int ll_write(struct afp_volume * volume,
 	uint64_t sizetowrite, ignored;
 	uint32_t ignored32;
 	unsigned char flags = 0;
-	unsigned int max_packet_size=volume->server->tx_quantum;
+	unsigned int max_packet_size=4096;
 	off_t o=0;
 	*totalwritten=0;
 
@@ -669,7 +782,6 @@ int ll_write(struct afp_volume * volume,
 			ret=afp_writeext(volume, fp->forkid,
 				offset+o,sizetowrite,
 				(char *) data+o,&ignored);
-		ret=0;
 		*totalwritten+=sizetowrite;
 		switch(ret) {
 		case kFPAccessDenied:
@@ -682,6 +794,9 @@ int ll_write(struct afp_volume * volume,
 		case kFPMiscErr:
 		case kFPParamErr:
 			err=EINVAL;
+			goto error;
+		case -ETIMEDOUT:
+			err=EACCES;
 			goto error;
 		}
 		o+=sizetowrite;

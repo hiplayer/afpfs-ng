@@ -52,6 +52,7 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 	char signature[AFP_SIGNATURE_LEN];
 	unsigned char versions[SERVER_MAX_VERSIONS];
 	unsigned int uams;
+	unsigned int flags;
 	char machine_type[AFP_MACHINETYPE_LEN];
 	char server_name[AFP_SERVER_NAME_LEN];
         char server_name_utf8[AFP_SERVER_NAME_UTF8_LEN];
@@ -82,6 +83,7 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 	memcpy(icon,&tmpserver->icon,AFP_SERVER_ICON_LEN);
 	memcpy(&versions,&tmpserver->versions,SERVER_MAX_VERSIONS);
 	uams=tmpserver->supported_uams;
+	flags=tmpserver->flags;
 	memcpy(signature,&tmpserver->signature,AFP_SIGNATURE_LEN);
 
 	memcpy(machine_type,&tmpserver->machine_type,AFP_MACHINETYPE_LEN);
@@ -105,8 +107,8 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 				strerror(errno));
 			goto error;
 		}
-	printf("afp_server_complete_connnection\n");
-
+		s->flags=flags;
+		printf("afp_server_complete_connnection\n");
 		if ((afp_server_complete_connection(priv,
 			s,&address,(unsigned char *) &versions,uams,
 			req->url.username, req->url.password, 

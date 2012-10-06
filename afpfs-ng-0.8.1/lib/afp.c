@@ -22,6 +22,12 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <netinet/tcp.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 
 #include "afp_protocol.h"
 #include "libafpclient.h"
@@ -647,7 +653,7 @@ int afp_server_connect(struct afp_server *server, int full)
 	}
 
 	server->exit_flag=0;
-	server->lastrequestid=0;
+	server->lastrequestid=65535;
 	server->connect_state=SERVER_STATE_CONNECTED;
 
 	add_server(server);
@@ -656,6 +662,9 @@ int afp_server_connect(struct afp_server *server, int full)
 
 	int flags = fcntl (server->fd, F_GETFL, 0);
 	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
+	int one = 1;
+	setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
 
 	if (!full) {
 		return 0;

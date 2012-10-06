@@ -108,6 +108,47 @@ static int fuse_unlink(const char *path)
 	return ret;
 }
 
+static int fuse_readdir_ex(const char *path, void *buf, fuse_fill_dir_t filler,
+                         off_t offset, struct fuse_file_info *fi)
+{
+	(void) fi;
+	struct afp_file_info * filebase = NULL, * p;
+	int ret;
+	unsigned long startindex = 0;
+	unsigned long getcount = 0;
+	int eof = 0;
+	struct afp_volume * volume=
+		(struct afp_volume *)
+		((struct fuse_context *)(fuse_get_context()))->private_data;
+
+	log_fuse_event(AFPFSD,LOG_DEBUG,"*** readdir of %s\n",path);
+
+	filler(buf, ".", NULL, 0);
+	filler(buf, "..", NULL, 0);
+	
+	startindex = offset + 1;
+	while(!eof){	
+
+		ret=ml_readdir_ex(volume,path,&filebase,startindex,&getcount,&eof);
+
+		if (ret) goto error;
+
+		for (p=filebase;p;p=p->next) {
+			filler(buf,p->name,NULL,0);
+		}
+
+		afp_ml_filebase_free(&filebase);
+		filebase = NULL;
+		startindex += getcount;
+	}
+
+    return 0;
+
+error:
+	return ret;
+}
+
+
 
 static int fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                          off_t offset, struct fuse_file_info *fi)
@@ -465,7 +506,7 @@ static struct fuse_operations afp_oper = {
 	.getattr	=fuse_getattr,
 	.open	= fuse_open,
 	.read	= fuse_read,
-	.readdir	= fuse_readdir,
+	.readdir	= fuse_readdir_ex,
 	.mkdir      = fuse_mkdir,
 	.readlink = fuse_readlink,
 	.rmdir	= fuse_rmdir,

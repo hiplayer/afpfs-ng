@@ -373,7 +373,7 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
 		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
 		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
-		if(rc<0){
+		if(rc==-ETIMEDOUT){
 			printf("header->command:%d\t",header->command);
 			printf("header->requestid:%d\t",ntohs(header->requestid));
 			printf("dsi_wait_request subcommand=%d\t",subcommand);
@@ -383,7 +383,7 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 			server->data_read=0;
 			loop_disconnect(server);
 		}
-	}while(subcommand!=afpReadExt&&rc==-ETIMEDOUT);
+	}while((subcommand!=afpWriteExt||subcommand!=afpReadExt)&&rc==-ETIMEDOUT);
 
 	return rc;
 } 

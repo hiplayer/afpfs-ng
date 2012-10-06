@@ -93,7 +93,7 @@ int afp_getsessiontoken_reply(struct afp_server *server, char *buf,
 	char * token_data = buf + sizeof(*reply);
 	unsigned int token_len;
 
-	if (ntohl(reply->header.length)<=sizeof(struct dsi_header)) {
+	if (size<=sizeof(struct dsi_header)) {
 		if (token) token->length=0;
 		return 0;
 	}
@@ -127,7 +127,7 @@ int afp_disconnectoldsession(struct afp_server * server, int type,
 	if ((request=malloc(sizeof(*request) + AFP_TOKEN_MAX_LEN))==NULL)
 		return -1;
 
-	token_data  = request + sizeof(*request);
+	token_data  = (char *) (((unsigned int) request)+sizeof(*request));
 
 	request->type=htons(type);
 

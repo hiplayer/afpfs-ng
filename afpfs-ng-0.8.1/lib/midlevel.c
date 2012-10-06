@@ -391,6 +391,28 @@ done:
 	return 0;
 }
 
+int ml_readdir_ex(struct afp_volume * volume, 
+	const char *path, 
+	struct afp_file_info **fb,unsigned long startindex,unsigned long *getcount,int *eof)
+{
+	int ret=0;
+	char converted_path[AFP_MAX_PATH];
+
+	if (convert_path_to_afp(volume->server->path_encoding,
+		converted_path,(char *) path,AFP_MAX_PATH)) {
+		return -EINVAL;
+	}
+
+	//ret=appledouble_readdir(volume, converted_path, fb);
+
+	if (ret<0) return ret;
+	if (ret==1) goto done;
+
+	return ll_readdir_ex(volume,converted_path,fb,0,startindex,getcount,eof);
+done:
+	return 0;
+}
+
 int ml_read(struct afp_volume * volume, const char *path, 
 	char *buf, size_t size, off_t offset,
 	struct afp_file_info *fp, int * eof)
