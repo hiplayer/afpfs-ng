@@ -373,7 +373,6 @@ try_again:
 		ret=EBUSY;
 		goto error;
 	case kFPMiscErr:
-	case kFPParamErr:
 		ret=EIO;
 		goto error;
 	case kFPEOFErr:
@@ -381,6 +380,7 @@ try_again:
 		break;
 	case kFPNoErr:
 		break;
+	case kFPParamErr:
 	case -ETIMEDOUT:
 		ret = ll_open(volume,NULL,fp->flags,fp);
 		if(ret == 0){
@@ -755,9 +755,8 @@ int ll_write(struct afp_volume * volume,
 	uint64_t sizetowrite, ignored;
 	uint32_t ignored32;
 	unsigned char flags = 0;
-	unsigned int max_packet_size=4096;
+	unsigned int max_packet_size=volume->server->tx_quantum;
 	off_t o=0;
-	*totalwritten=0;
 
 	if (!fp) return -EBADF;
 
@@ -767,13 +766,14 @@ int ll_write(struct afp_volume * volume,
 		ret=EBUSY;
 		goto error;
 	}
-
+try_again:
+	o = 0;
+	*totalwritten=0;
 	ret=0;
 	while (*totalwritten < size) {
 		sizetowrite=max_packet_size;
 		if ((size-*totalwritten)<max_packet_size)
 			sizetowrite=size-*totalwritten;
-
 		if (volume->server->using_version->av_number < 30) 
 			ret=afp_write(volume, fp->forkid,
 				offset+o,sizetowrite,
@@ -792,12 +792,16 @@ int ll_write(struct afp_volume * volume,
 			goto error;
 		case kFPLockErr:
 		case kFPMiscErr:
-		case kFPParamErr:
 			err=EINVAL;
 			goto error;
+		case kFPParamErr:
 		case -ETIMEDOUT:
-			err=EACCES;
-			goto error;
+			ret = ll_open(volume,NULL,fp->flags,fp);
+			if(ret == 0){
+				goto try_again;
+			}else{
+				return ret;
+			}
 		}
 		o+=sizetowrite;
 	}

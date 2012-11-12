@@ -63,6 +63,42 @@ readt(int fd,char *data,int total){
 	return len;
 }
 
+
+int
+writet (int fd, char *buffer, int total)
+{
+	int ret, len;
+	fd_set wset;
+	struct timeval tv;
+
+	for (len = 0; len < total; len += ret) {
+		int sr;
+		FD_ZERO (&wset);
+		FD_SET (fd, &wset);
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		ret = 0;
+
+		sr = select (fd + 1, NULL, &wset, NULL, &tv);
+		if (sr == -1) {
+			perror ("select()");
+			return -1;
+		} else if (sr == 0) {
+			return -1;
+		} else if (sr) {
+			if (FD_ISSET (fd, &wset)) {
+				if ((ret = write (fd, buffer + len, total - len)) < 0) {
+					perror ("write()");
+					return -1;
+				}
+			}
+		} 
+	}
+	return len;
+}
+
+
+
 static int dsi_remove_from_request_queue(struct afp_server *server,
 	struct dsi_request *toremove);
 
@@ -224,7 +260,7 @@ static int dsi_remove_from_request_queue(struct afp_server *server,
 int dsi_send_buffer(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other){
 
 	pthread_mutex_lock(&server->send_mutex);
-	if (write(server->fd,msg,size)<0) {
+	if (writet(server->fd,msg,size)<0) {
 		if ((errno==EPIPE) || (errno==EBADF)) {
 			/* The server has closed the connection */
 			server->connect_state=SERVER_STATE_DISCONNECTED;
@@ -362,28 +398,26 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 	afp_wait_for_started_loop();
 	do{
 		if (server->connect_state==SERVER_STATE_DISCONNECTED) {
-			char mesg[1024];
-			unsigned int l=0; 
-			/* Try and reconnect */
-			printf("try and reconnect\n");
-
-			afp_server_reconnect(server,mesg,&l,1024);
+			afp_server_try_reconnect(server);
 		}
 		dsi_inc_header(server,header);
 		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
 		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
 		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
 		if(rc==-ETIMEDOUT){
-			printf("header->command:%d\t",header->command);
-			printf("header->requestid:%d\t",ntohs(header->requestid));
-			printf("dsi_wait_request subcommand=%d\t",subcommand);
-			printf("dsi_wait_request rc=%d\n",rc);
+			printf("command:%d\t",header->command);
+			printf("requestid:%d\t",ntohs(header->requestid));
+			printf("subcommand=%25.25s\t",afp_get_command_name(subcommand));
+			printf("rc=%d\n",rc);
 		}
 		if(rc==-ETIMEDOUT){
 			server->data_read=0;
 			loop_disconnect(server);
 		}
-	}while((subcommand!=afpWriteExt||subcommand!=afpReadExt)&&rc==-ETIMEDOUT);
+		if(subcommand == afpWrite||subcommand == afpRead||subcommand == afpWriteExt||subcommand == afpReadExt){
+			break;
+		}
+	}while(rc==-ETIMEDOUT);
 
 	return rc;
 } 
@@ -561,7 +595,7 @@ int dsi_command_reply(struct afp_server* server,unsigned short subcommand, void 
 		#ifdef DEBUG_DSI
 		printf("=== read() for afpRead, %d bytes\n",buf->maxsize-buf->size);
 		#endif
-		if ((ret=read(server->fd,buf->data+buf->size,
+		if ((ret=readt(server->fd,buf->data+buf->size,
 			buf->maxsize-buf->size))<0) {
 			return -1;
 		}
@@ -873,7 +907,7 @@ int dsi_recv(struct afp_server * server)
 		#ifdef DEBUG_DSI
 		printf("<<< read() for dsi, %d bytes\n",amount_to_read);
 		#endif
-		ret = read(server->fd,server->incoming_buffer+server->data_read,
+		ret = readt(server->fd,server->incoming_buffer+server->data_read,
 			amount_to_read);
 		error_count++;
 		//if(error_count%100==0){
@@ -934,7 +968,7 @@ gotenough:
 		#ifdef DEBUG_DSI
 		printf("<<< read() in response to a request, %d bytes\n",newmax);
 		#endif
-		ret = read(server->fd,buf->data+buf->size,
+		ret = readt(server->fd,buf->data+buf->size,
 			newmax);
 		if (ret<0) {
 			goto error;
@@ -983,7 +1017,7 @@ gotenough:
 		#ifdef DEBUG_DSI
 		printf("<<< read() of rest of AFP, %d bytes\n",amount_to_read);
 		#endif
-		ret = read(server->fd, (void *)
+		ret = readt(server->fd, (void *)
 		(((unsigned int) server->incoming_buffer)+server->data_read),
 			amount_to_read);
 		if (ret<0){

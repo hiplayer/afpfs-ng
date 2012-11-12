@@ -420,6 +420,15 @@ int afp_enumerateext2(
 	afp_enumerateext2_request_packet->maxreplysize=htonl(5280);
 	copy_path(server,path,pathname,strlen(pathname));
 	unixpath_to_afppath(server,path);
+	//printf("afp_enumerateext2:\t");
+	//printf("volid:%x\t",volume->volid);
+	//printf("dirid:%x\t",dirid);
+	//printf("filebitmap:%x\t",filebitmap);
+	//printf("dirbitmap:%x\t",dirbitmap);
+	//printf("reqcount:%u\t",reqcount);
+	//printf("startindex:%u\n",startindex);
+
+
 
 	
 	rc=dsi_send(server, (char *) data,len,DSI_DEFAULT_TIMEOUT,

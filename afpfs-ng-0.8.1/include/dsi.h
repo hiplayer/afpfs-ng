@@ -25,9 +25,9 @@ struct dsi_session * dsi_create(struct afp_server *server);
 int dsi_restart(struct afp_server *server);
 int dsi_recv(struct afp_server * server);
 
-#define DSI_BLOCK_TIMEOUT 20 
+#define DSI_BLOCK_TIMEOUT 5 
 #define DSI_DONT_WAIT 0
-#define DSI_DEFAULT_TIMEOUT 5
+#define DSI_DEFAULT_TIMEOUT 1
 
 
 #endif

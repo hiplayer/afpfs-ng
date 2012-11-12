@@ -224,9 +224,7 @@ int afp_main_loop(int command_fd) {
 				pthread_create(&ending_thread,NULL,just_end_it_now,NULL);
 			}
 		if (ret<0) {
-			printf("pselect done,ret:%d\n",ret);
-			printf("errno=%d\n",errno);
-			printf("strerror=%s\n",strerror(errno));
+			printf("select done ret:%d\n",ret);
 			switch(errno) {
 			case EINTR:
 			case EAGAIN:

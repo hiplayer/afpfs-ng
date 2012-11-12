@@ -636,6 +636,22 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
         return 0;
 }
 
+int afp_server_try_reconnect(struct afp_server * server){
+	char mesg[1024]={0};
+	unsigned int l=0; 
+	int ret = 0;
+	/* Try and reconnect */
+	while(1){
+		ret = afp_server_reconnect(server,mesg,&l,1024);
+		if(ret == 1){
+			loop_disconnect(server);
+			printf("mesg:%s\n",mesg);
+		}else{
+			break;
+		}
+	}
+	return ret;
+}
 
 int afp_server_connect(struct afp_server *server, int full)
 {
@@ -664,7 +680,6 @@ int afp_server_connect(struct afp_server *server, int full)
 	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
 	int one = 1;
 	setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-
 
 	if (!full) {
 		return 0;
