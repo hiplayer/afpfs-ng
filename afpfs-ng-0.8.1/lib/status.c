@@ -65,11 +65,112 @@ static void print_volume_status(struct afp_volume * v,
 	*pos_p=pos;
 }
 
+static int snprint_size(char *s,int n,unsigned long l)
+{
+
+	if (l>(1073741824)) {
+		return snprintf(s,n,"%4ldTb",l/1073741824);
+	} 
+	if (l>(1048576)) {
+		return snprintf(s,n,"%4ldGb",l/1048576);
+	} 
+	if (l>(1024)) {
+		return snprintf(s,n,"%4ldMb",l>>10);
+	} 
+	return snprintf(s,n,"%4ldKb\n",l);
+
+}
+
+static void check_volume_alive(struct afp_volume * v, 
+	char * text,int * pos_p, int * len,int *alive)
+{
+	struct afp_server * s = v->server;
+	int pos = *pos_p;
+	unsigned int fl = v->extra_flags;
+	struct statvfs stat;
+	unsigned long avail, used,total;
+	unsigned int portion;
+
+
+	pos+=snprintf(text+pos,*len-pos,
+		"Volume %s, mounted: %s%s\n",
+		v->volume_name_printable,
+		(v->mounted==AFP_VOLUME_MOUNTED) ? v->mountpoint:"No",
+		((v->mounted==AFP_VOLUME_MOUNTED) && (volume_is_readonly(v))) ?
+			" (read only)":"");
+
+	if (v->mounted==AFP_VOLUME_MOUNTED) {
+		if(0==ml_statfs(v,"/",&stat)){
+			avail=stat.f_bavail*4;
+			used=(stat.f_blocks-stat.f_bavail)*4;
+			total=avail+used;
+			portion = (unsigned int) (((float) used*100)/((float) avail+(float) used));
+			pos+=snprintf(text+pos,*len-pos,"  Size   Used  Avail  Capacity\n");
+			pos+=snprint_size(text+pos,*len-pos,total); 
+			pos+=snprintf(text+pos,*len-pos," ");
+			pos+=snprint_size(text+pos,*len-pos,used); 
+			pos+=snprintf(text+pos,*len-pos," ");
+			pos+=snprint_size(text+pos,*len-pos,avail); 
+			pos+=snprintf(text+pos,*len-pos," ");
+			pos+=snprintf(text+pos,*len-pos,"   %d%%",portion);
+			if(alive!=NULL){
+				*alive=1;
+			}
+		}	
+	}
+	*pos_p=pos;
+}
+
+
+int afp_check_alive(struct afp_server * s, char * text, int * len,int *alive_flag) 
+{
+	int j;
+	struct afp_volume *v;
+	char signature_string[AFP_SIGNATURE_LEN*3+1];
+	int pos=0;
+	int firsttime=0;
+	struct dsi_request * request;
+	int alive = 0;
+
+	memset(text,0,*len);
+
+	if (s==NULL) {
+		pos+=snprintf(text+pos,*len-pos,
+			"Not connected to any servers\n");
+		goto out;
+	}
+
+	pos+=snprintf(text+pos,*len-pos,
+		"Server %s\n"
+		"    connection: %s:%d %s\n"
+		"    using AFP version: %s\n",
+		s->server_name_printable,
+		inet_ntoa(s->address.sin_addr),ntohs(s->address.sin_port),
+			(s->connect_state==SERVER_STATE_DISCONNECTED ? 
+			"Disconnected" : "(active)"),
+		s->using_version->av_name
+	);
+
+	for (j=0;j<s->num_volumes;j++) {
+		v=&s->volumes[j];
+		check_volume_alive(v,text,&pos,len,&alive);
+		if(alive==1&&alive_flag!=NULL){
+			*alive_flag = 1;
+		}
+		pos+=snprintf(text+pos,*len-pos,"\n");
+	}
+
+out:
+	*len-=pos;
+	return pos;
+
+}
+
 int afp_status_server(struct afp_server * s, char * text, int * len) 
 {
 	int j;
 	struct afp_volume *v;
-	char signature_string[AFP_SIGNATURE_LEN*2+1];
+	char signature_string[AFP_SIGNATURE_LEN*3+1];
 	int pos=0;
 	int firsttime=0;
 	struct dsi_request * request;

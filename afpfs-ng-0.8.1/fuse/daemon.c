@@ -203,6 +203,18 @@ error:
 	return -1;
 }
 
+void write_pid(){
+	int pid;
+	int fd;
+	char command[1024];
+	pid = getpid();
+	unlink(SERVER_PIDFILE);
+	fd = creat(SERVER_PIDFILE,O_RDWR);
+	snprintf(command,sizeof(command),"%d",pid);
+	write(fd,command,strlen(command));
+	close(fd);
+	chmod(SERVER_PIDFILE,0777);
+}
 
 int main(int argc, char *argv[]) {
 
@@ -222,7 +234,6 @@ int main(int argc, char *argv[]) {
 	int c;
 	int optnum;
 	int command_fd=-1;
-
 	fuse_register_afpclient();
 
 	if (init_uams()<0) return -1;
@@ -269,9 +280,8 @@ int main(int argc, char *argv[]) {
 		return -1;
 	}
 
-	
 	if ((!dofork) || (fork()==0)) {
-
+		write_pid();
 		if ((command_fd=startup_listener())<0)
 			goto error;
 

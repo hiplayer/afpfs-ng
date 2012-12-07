@@ -2,6 +2,7 @@
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/un.h>
@@ -10,6 +11,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <grp.h>
+#include <fcntl.h>
 
 #include "config.h"
 #include <afp.h>
@@ -155,10 +157,12 @@ static void usage(void)
 "         -m, --map <mapname> : use this uid/gid mapping method, one of:\n"
 "               \"Common user directory\", \"Login ids\"\n"
 "    status: get status of the AFP daemon\n\n"
+"    check_alive : check volume alive \n\n"
 "    unmount <mountpoint> : unmount\n\n"
 "    suspend <servername> : terminates the connection to the server, but\n"
 "                           maintains the mount.  For laptop suspend/resume\n"
 "    resume  <servername> : resumes the server connection \n\n"
+"    get_volumes afp://<username>:<password>@<ip> : get volumes \n\n"
 "    exit                 : unmounts all volumes and exits afpfsd\n"
 );
  }
@@ -211,6 +215,22 @@ static int do_status(int argc, char ** argv)
 
         return 0;
 }
+
+static int do_alive(int argc, char ** argv) 
+{
+        int c;
+        int option_index=0;
+	struct afp_server_status_request * req;
+	int optnum;
+	outgoing_len=sizeof(struct afp_server_status_request)+1;
+	req = (void *) outgoing_buffer+1;
+	memset(outgoing_buffer,0,outgoing_len);
+	outgoing_buffer[0]=AFP_SERVER_COMMAND_ALIVE;
+
+        return 0;
+}
+
+
 
 static int do_resume(int argc, char ** argv) 
 {
@@ -363,6 +383,102 @@ static int do_mount(int argc, char ** argv)
 
 	snprintf(req->mountpoint,255,"%s",argv[optnum++]);
 
+
+        return 0;
+}
+
+static int do_get_volumes_new(int argc, char ** argv) 
+{
+        int c;
+        int option_index=0;
+	struct afp_server_mount_request * req;
+	int optnum;
+	unsigned int uam_mask=default_uams_mask();
+
+	struct option long_options[] = {
+		{"afpversion",1,0,'v'},
+		{"volumepassword",1,0,'V'},
+		{"user",1,0,'u'},
+		{"pass",1,0,'p'},
+		{"port",1,0,'o'},
+		{"uam",1,0,'a'},
+		{"map",1,0,'m'},
+		{0,0,0,0},
+	};
+
+	if (argc<4) {
+		usage();
+		return -1;
+	}
+
+	outgoing_len=sizeof(struct afp_server_mount_request)+1;
+	req = (void *) outgoing_buffer+1;
+	memset(outgoing_buffer,0,outgoing_len);
+	outgoing_buffer[0]=AFP_SERVER_COMMAND_GET_VOLUMES;
+	req->changeuid=changeuid;
+	req->url.port=548;
+	req->map=AFP_MAPPING_UNKNOWN;
+
+        while(1) {
+		optnum++;
+                c = getopt_long(argc,argv,"a:u:m:o:p:v:V:",
+                        long_options,&option_index);
+                if (c==-1) break;
+                switch(c) {
+                case 'a':
+			if (strcmp(optarg,"guest")==0) 
+				uam_mask=UAM_NOUSERAUTHENT;
+			else
+				uam_mask=uam_string_to_bitmap(optarg);
+                        break;
+                case 'm':
+			req->map=map_string_to_num(optarg);
+                        break;
+                case 'u':
+                        snprintf(req->url.username,AFP_MAX_USERNAME_LEN,"%s",optarg);
+                        break;
+                case 'o':
+                        req->url.port=strtol(optarg,NULL,10);
+                        break;
+                case 'p':
+                        snprintf(req->url.password,AFP_MAX_PASSWORD_LEN,"%s",optarg);
+                        break;
+                case 'V':
+                        snprintf(req->url.volpassword,9,"%s",optarg);
+                        break;
+                case 'v':
+                        req->url.requested_version=strtol(optarg,NULL,10);
+                        break;
+                }
+        }
+
+	if (strcmp(req->url.password, "-") == 0) {
+		char *p = getpass("AFP Password: ");
+		if (p)
+			snprintf(req->url.password,AFP_MAX_PASSWORD_LEN,"%s",p);
+	}
+	if (strcmp(req->url.volpassword, "-") == 0) {
+		char *p = getpass("Password for volume: ");
+		if (p)
+			snprintf(req->url.volpassword,9,"%s",p);
+	}
+
+	optnum=optind+1;
+	if (optnum>=argc) {
+		printf("No volume or mount point specified\n");
+		return -1;
+	}
+	if (sscanf(argv[optnum++],"%s",
+		req->url.servername)!=1) {
+		printf("Incorrect server specification\n");
+		return -1;
+	}
+	if (uam_mask==0) {
+		printf("Unknown UAM\n");
+		return -1;
+	}
+
+	req->uam_mask=uam_mask;
 
         return 0;
 }
@@ -523,14 +639,16 @@ static int prepare_buffer(int argc, char * argv[])
 		return do_resume(argc,argv);
 	} else if (strncmp(argv[1],"suspend",7)==0) {
 		return do_suspend(argc,argv);
-
 	} else if (strncmp(argv[1],"status",6)==0) {
 		return do_status(argc,argv);
-
+	} else if (strncmp(argv[1],"check_alive",11)==0) {
+		return do_alive(argc,argv);
 	} else if (strncmp(argv[1],"unmount",7)==0) {
 		return do_unmount(argc,argv);
 	} else if (strncmp(argv[1], "get_volumes", 12)==0) {
 		return do_get_volumes(argc,argv);
+	} else if (strncmp(argv[1], "get_volumes_new", 16)==0) {
+		return do_get_volumes_new(argc,argv);
 	} else if (strncmp(argv[1],"exit",4)==0) {
 		return do_exit(argc,argv);
 
@@ -541,7 +659,21 @@ static int prepare_buffer(int argc, char * argv[])
 
 	return 0;
 }
-
+void kill_afpfsd(){
+	int fd;
+	int pid;
+	char buf[1024];
+	char command[1024];
+	if(0 != access(SERVER_PIDFILE,R_OK)){
+		return;
+	}
+	fd = open(SERVER_PIDFILE,O_RDONLY);
+	read(fd,buf,sizeof(buf));
+	pid = atoi(buf);
+	if(pid > 0){
+		kill(pid,SIGKILL);
+	}
+}
 
 int read_answer(int sock) {
 	int len=0, expected_len=0, packetlen;
@@ -557,11 +689,12 @@ int read_answer(int sock) {
 	FD_ZERO(&rds);
 	FD_SET(sock,&rds);
 	while (1) {
-		tv.tv_sec=30; tv.tv_usec=0;
+		tv.tv_sec=3; tv.tv_usec=0;
 		ords=rds;
 		ret=select(sock+1,&ords,NULL,NULL,&tv);
 		if (ret==0) {
 			printf("No response from server\n");
+			kill_afpfsd();
 			return -1;
 		}
 		if (FD_ISSET(sock,&ords)) {

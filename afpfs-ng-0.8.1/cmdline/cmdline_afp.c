@@ -1217,7 +1217,7 @@ int cmdline_afp_setup(int recursive, char * url_string)
 {
 	struct passwd * passwd;
 
-	snprintf(curdir,PATH_MAX,"%s",DEFAULT_DIRECTORY);
+	snprintf(curdir,AFP_MAX_PATH,"%s",DEFAULT_DIRECTORY);
 	if (init_uams()<0) return -1;
 
 	afp_default_url(&url);

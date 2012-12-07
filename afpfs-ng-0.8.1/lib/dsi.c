@@ -173,6 +173,35 @@ int dsi_sendtickle(struct afp_server *server)
 	return 0;
 }
 
+int dsi_closesession_request(struct afp_server *server)
+{
+	struct {
+		struct dsi_header dsi_header  __attribute__((__packed__));
+	} __attribute__((__packed__)) dsi_closesession_header;
+
+	dsi_setup_header(server,&dsi_closesession_header.dsi_header,DSI_DSICloseSession);
+
+	dsi_send(server,(char *) &dsi_closesession_header,
+		sizeof(dsi_closesession_header),DSI_DONT_WAIT,0,NULL);
+	return 0;
+}
+
+int dsi_closesession_reply(struct afp_server *server)
+{
+	struct {
+		struct dsi_header dsi_header  __attribute__((__packed__));
+	} __attribute__((__packed__)) dsi_closesession_header;
+
+	dsi_setup_header(server,&dsi_closesession_header.dsi_header,DSI_DSICloseSession);
+	dsi_closesession_header.dsi_header.flags = 0x01;
+
+	dsi_send(server,(char *) &dsi_closesession_header,
+		sizeof(dsi_closesession_header),DSI_DONT_WAIT,0,NULL);
+	return 0;
+}
+
+
+
 int dsi_opensession(struct afp_server *server)
 {
 	struct {
@@ -404,7 +433,7 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
 		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
 		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
-		if(rc==-ETIMEDOUT){
+		if(rc<0){
 			printf("command:%d\t",header->command);
 			printf("requestid:%d\t",ntohs(header->requestid));
 			printf("subcommand=%25.25s\t",afp_get_command_name(subcommand));
@@ -414,7 +443,7 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 			server->data_read=0;
 			loop_disconnect(server);
 		}
-		if(subcommand == afpWrite||subcommand == afpRead||subcommand == afpWriteExt||subcommand == afpReadExt){
+		if(subcommand==afpGetVolParms || subcommand == afpWrite||subcommand == afpRead||subcommand == afpWriteExt||subcommand == afpReadExt){
 			break;
 		}
 	}while(rc==-ETIMEDOUT);
@@ -1046,7 +1075,7 @@ process_packet:
 	switch (header->command) {
 
 	case DSI_DSICloseSession:
-		dsi_incoming_closesession(server);
+		//dsi_incoming_closesession(server);
 		break;
 	case DSI_DSIGetStatus:
 		dsi_getstatus_reply(server);

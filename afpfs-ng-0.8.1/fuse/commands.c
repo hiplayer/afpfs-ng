@@ -472,6 +472,34 @@ static unsigned char process_status(struct fuse_client * c)
 
 }
 
+static unsigned char process_alive(struct fuse_client * c)
+{
+	struct afp_server * s;
+	int alive_flag=0;
+	int alive = 0;
+
+	char text[40960];
+	int len=40960;
+
+	s=get_server_base();
+
+	for (s=get_server_base();s;s=s->next) {
+		if(afp_check_alive(s,text,&len,&alive_flag)){
+			if(alive_flag==1){
+				alive=1;
+			}
+			log_for_client((void *)c,AFPFSD,LOG_DEBUG,text);
+		}
+	}
+	if(alive==1){
+		return AFP_SERVER_RESULT_OKAY;
+	}else{
+		return AFP_SERVER_RESULT_ERROR;
+	}
+}
+
+
+
 static int process_mount(struct fuse_client * c)
 {
 	struct afp_server_mount_request * req;
@@ -632,6 +660,9 @@ static void * process_command_thread(void * other)
 		break;
 	case AFP_SERVER_COMMAND_STATUS: 
 		ret=process_status(c);
+		break;
+	case AFP_SERVER_COMMAND_ALIVE: 
+		ret=process_alive(c);
 		break;
 	case AFP_SERVER_COMMAND_UNMOUNT: 
 		ret=process_unmount(c);

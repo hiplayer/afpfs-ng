@@ -490,17 +490,6 @@ int afp_server_login(struct afp_server *server,
 		goto error;
 	}
 
-	if (server->flags & kSupportsReconnect) {
-		/* Get the session */
-
-		if (server->need_resume) {
-			resume_token(server); 
-			server->need_resume=0;
-		} else {
-			setup_token(server);
-		}
-	}
-
 	return 0;
 error:
 	return 1;
@@ -599,6 +588,14 @@ int afp_connect_volume(struct afp_volume * volume, struct afp_server * server,
 	}
 	
 	volume->mounted=AFP_VOLUME_MOUNTED;
+	/* Get the session */
+
+	if (server->need_resume) {
+		resume_token(server); 
+		server->need_resume=0;
+	} else {
+		setup_token(server);
+	}
 
 	return 0;
 error:
@@ -617,6 +614,11 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
 			s->server_name_printable);
                 return 1;
         }
+/*
+	dsi_closesession_request(s);
+
+	dsi_closesession_reply(s);
+*/
 
         dsi_opensession(s);
 
@@ -653,6 +655,47 @@ int afp_server_try_reconnect(struct afp_server * server){
 	return ret;
 }
 
+int connect_nonb(int sockfd, struct sockaddr * saptr, socklen_t salen, int nsec)  
+{  
+	int flags, n, error;  
+	socklen_t len;  
+	fd_set rset, wset;  
+	struct timeval tval;  
+
+	flags = fcntl(sockfd, F_GETFL, 0);  
+	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);  
+	errno = 0;  
+	if ( (n = connect(sockfd, saptr, salen)) < 0)  
+		if (errno != EINPROGRESS)  
+			return (-1);  
+	if (n == 0)  
+		goto done;  
+	FD_ZERO(&rset);  
+	FD_SET(sockfd, &rset);  
+	wset = rset;  
+	tval.tv_sec = nsec;  
+	tval.tv_usec = 0;  
+	if ((n = select(sockfd+1, &rset, &wset, NULL , nsec? &tval:NULL)) == 0) {  
+		errno = ETIMEDOUT;  
+		goto done;  
+	}  
+	if(FD_ISSET(sockfd, &rset) || FD_ISSET(sockfd, &wset)) {  
+		len = sizeof(error);  
+		if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0){
+			errno = ETIMEDOUT;  
+		}
+	}else{
+		errno = ETIMEDOUT;  
+	} 
+done:  
+	fcntl(sockfd, F_SETFL, flags);   
+	if (error) {  
+		errno = error;  
+		return (-1);  
+	}  
+	return (0);  
+} 
+
 int afp_server_connect(struct afp_server *server, int full)
 {
 	int error = 0;
@@ -663,7 +706,12 @@ int afp_server_connect(struct afp_server *server, int full)
 		goto error;
 	}
 
-	if (connect(server->fd,(struct sockaddr *) &server->address,sizeof(server->address)) < 0) {
+	int flags = fcntl (server->fd, F_GETFL, 0);
+	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
+	int one = 1;
+	setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+	if (connect_nonb(server->fd,(struct sockaddr *) &server->address,sizeof(server->address),1) < 0) {
 		error = errno;
 		goto error;
 	}
@@ -675,12 +723,6 @@ int afp_server_connect(struct afp_server *server, int full)
 	add_server(server);
 
 	add_fd_and_signal(server->fd);
-
-	int flags = fcntl (server->fd, F_GETFL, 0);
-	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
-	int one = 1;
-	setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-
 	if (!full) {
 		return 0;
 	}
