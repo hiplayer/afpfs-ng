@@ -590,7 +590,7 @@ static int process_mount(struct fuse_client * c)
 		/* Kickoff a thread to see how quickly it exits.  If
 		 * it exits quickly, we have an error and it failed. */
 
-		pthread_create(&volume->thread,NULL,start_fuse_thread,&arg);
+		my_pthread_create(&volume->thread,NULL,start_fuse_thread,&arg);
 
 		if (arg.wait) ret = pthread_cond_timedwait(
 				&volume->startup_condition_cond,&mutex,&ts);
@@ -718,7 +718,7 @@ static int process_command(struct fuse_client * c)
 	c->incoming_size=ret;
 
 	pthread_t thread;
-	pthread_create(&thread,NULL,process_command_thread,c);
+	my_pthread_create(&thread,NULL,process_command_thread,c);
 	return 0;
 out:
 	fd=c->fd;

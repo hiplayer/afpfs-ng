@@ -126,7 +126,6 @@ void loop_disconnect(struct afp_server *s)
         close(s->fd);
 
 	s->connect_state=SERVER_STATE_DISCONNECTED;
-	s->need_resume=1;
 }
 
 static int process_server_fds(fd_set * set, int max_fd, int ** onfd)
@@ -177,7 +176,7 @@ static void * afp_main_quick_startup_thread(void * other)
 int afp_main_quick_startup(pthread_t * thread)
 {
 	pthread_t loop_thread;
-	pthread_create(&loop_thread,NULL,afp_main_quick_startup_thread,NULL);
+	my_pthread_create(&loop_thread,NULL,afp_main_quick_startup_thread,NULL);
 	if (thread) 
 		memcpy(thread,&loop_thread,sizeof(pthread_t));
 	return 0;
@@ -217,7 +216,6 @@ int afp_main_loop(int command_fd) {
 			tv.tv_sec=0;
 			tv.tv_nsec=0;
 		}
-
 		ret=pselect(max_fd,&ords,NULL,&oeds,&tv,&orig_sigmask);
 			if (exit_program==2) break;
 			if (exit_program==1) {
@@ -227,15 +225,13 @@ int afp_main_loop(int command_fd) {
 			printf("select done ret:%d\n",ret);
 			switch(errno) {
 			case EINTR:
-			case EAGAIN:
-				continue;
-				//deal_with_server_signals(&rds,&max_fd);
-				//break;
+				deal_with_server_signals(&rds,&max_fd);
+				break;
 			case EBADF:
 				if (fderrors > 100) {
 					log_for_client(NULL,AFPFSD,LOG_ERR,
 					"Too many fd errors, exiting\n");
-					break;
+					//break;
 				} 
 				fderrors++;
 				continue;
@@ -267,6 +263,7 @@ int afp_main_loop(int command_fd) {
 			}
 		}
 	}
+	pthread_join(&ending_thread,NULL);
 
 error:
 	return -1;

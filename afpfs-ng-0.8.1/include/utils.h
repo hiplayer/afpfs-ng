@@ -40,4 +40,9 @@ char * create_path(struct afp_server * server, char * pathname, unsigned short *
 
 int invalid_filename(struct afp_server * server, const char * filename);
 
+int my_pthread_create (pthread_t *__newthread,
+			   pthread_attr_t *__attr,
+			   void *(*__start_routine) (void *),
+			   void *__arg);
+
 #endif

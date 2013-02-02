@@ -30,6 +30,7 @@
 
 /* define this in order to get reams of DSI debugging information */
 #undef DEBUG_DSI
+/*
 static int
 readt(int fd,char *data,int total){
 	int sr=-1, nb_read,len;
@@ -62,7 +63,7 @@ readt(int fd,char *data,int total){
 	}while(0);
 	return len;
 }
-
+*/
 
 int
 writet (int fd, char *buffer, int total)
@@ -200,8 +201,6 @@ int dsi_closesession_reply(struct afp_server *server)
 	return 0;
 }
 
-
-
 int dsi_opensession(struct afp_server *server)
 {
 	struct {
@@ -328,7 +327,7 @@ int dsi_add_request(struct afp_server *server, char * msg, int size,int wait,uns
 	}
 	server->stats.requests_pending++;
 	pthread_mutex_unlock(&server->request_queue_mutex);
-
+	pthread_mutex_init(&new_request->mutex,NULL);
 	pthread_cond_init(&new_request->condition_cond,NULL);
 	*out=new_request;
 	return 0;
@@ -340,12 +339,12 @@ int dsi_wait_request(struct afp_server *server, char * msg, int size,int wait,un
 	struct timespec ts;
 	struct timeval tv;
 	int rc = 0;
+	int times = 0;
 
 	new_request=in;
 	if (tmpwait<0) {
 
-		pthread_mutex_t     mutex = PTHREAD_MUTEX_INITIALIZER;
-		pthread_mutex_lock(&mutex);
+		pthread_mutex_lock(&new_request->mutex);
 
 		/* Wait forever */
 		#ifdef DEBUG_DSI
@@ -356,13 +355,13 @@ int dsi_wait_request(struct afp_server *server, char * msg, int size,int wait,un
 
 		rc=pthread_cond_wait( 
 			&new_request->condition_cond, 
-				&mutex );
-		pthread_mutex_unlock(&mutex);
+				&new_request->mutex );
+		pthread_mutex_unlock(&new_request->mutex);
 
 	} else if (tmpwait>0) {
-		pthread_mutex_t     mutex = PTHREAD_MUTEX_INITIALIZER;
-		pthread_mutex_lock(&mutex);
-
+retry:
+		times++;
+		pthread_mutex_lock(&new_request->mutex);
 		#ifdef DEBUG_DSI
 		printf("=== Waiting for %d %s, for %ds\n",
 			new_request->requestid,
@@ -379,19 +378,25 @@ int dsi_wait_request(struct afp_server *server, char * msg, int size,int wait,un
 			printf("=== Changing my mind, no longer waiting for %d\n",
 				new_request->requestid);
 			#endif
-			pthread_mutex_unlock(&mutex);
+			pthread_mutex_unlock(&new_request->mutex);
 			goto skip;
 		}
 		rc=pthread_cond_timedwait( 
 			&new_request->condition_cond, 
-			&mutex,&ts);
-		pthread_mutex_unlock(&mutex);
+			&new_request->mutex,&ts);
+		pthread_mutex_unlock(&new_request->mutex);
+
 		if (rc==ETIMEDOUT) {
 /* FIXME: should handle this case properly */
 			#ifdef DEBUG_DSI
 			printf("=== Timedout for %d\n",
 				new_request->requestid);
 			#endif
+			if(server->data_read !=0&&times < DSI_RETRY_TIMES){
+				printf("%s,%d,times=%d,data_read=%d\n", __FUNCTION__, __LINE__, times,server->data_read);
+				goto retry;
+			}
+			server->data_read = 0;
 			rc=-ETIMEDOUT;
 			goto out;
 		}
@@ -418,7 +423,8 @@ out:
 int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other){
 	struct dsi_header  *header = (struct dsi_header *) msg;
 	struct dsi_request * new_request = NULL;
-	int rc=0;
+	int rc = 0;
+	int try_times = 0;
  	header->length=htonl(size-sizeof(struct dsi_header));
 	if (!server_still_valid(server) || server->fd==0)
 		return -1;
@@ -426,25 +432,34 @@ int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned c
 	dsi_dec_header(server,header);
 	afp_wait_for_started_loop();
 	do{
+		try_times++;
 		if (server->connect_state==SERVER_STATE_DISCONNECTED) {
-			afp_server_try_reconnect(server);
+			if(afp_server_try_reconnect(server)<0) return -1;
 		}
 		dsi_inc_header(server,header);
 		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
 		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
-		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
 		if(rc<0){
+			server->data_read=0;
+			loop_disconnect(server);
+			continue;
+		}
+		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
+		if(rc<0||
+		subcommand == afpLogin||
+		subcommand == afpLogout||
+		subcommand == afpLoginCont||
+		subcommand == afpGetSrvrMsg||
+		subcommand == afpGetSessionToken||
+		subcommand == afpDisconnectOldSession){
 			printf("command:%d\t",header->command);
 			printf("requestid:%d\t",ntohs(header->requestid));
 			printf("subcommand=%25.25s\t",afp_get_command_name(subcommand));
 			printf("rc=%d\n",rc);
 		}
-		if(rc==-ETIMEDOUT){
+		if(try_times>=DSI_RETRY_TIMES && rc==-ETIMEDOUT){
 			server->data_read=0;
 			loop_disconnect(server);
-		}
-		if(subcommand==afpGetVolParms || subcommand == afpWrite||subcommand == afpRead||subcommand == afpWriteExt||subcommand == afpReadExt){
-			break;
 		}
 	}while(rc==-ETIMEDOUT);
 
@@ -624,7 +639,7 @@ int dsi_command_reply(struct afp_server* server,unsigned short subcommand, void 
 		#ifdef DEBUG_DSI
 		printf("=== read() for afpRead, %d bytes\n",buf->maxsize-buf->size);
 		#endif
-		if ((ret=readt(server->fd,buf->data+buf->size,
+		if ((ret=read(server->fd,buf->data+buf->size,
 			buf->maxsize-buf->size))<0) {
 			return -1;
 		}
@@ -833,8 +848,7 @@ void dsi_getstatus_reply(struct afp_server * server)
 
 void dsi_incoming_closesession(struct afp_server *server)
 {
-	afp_unmount_all_volumes(server);
-	loop_disconnect(server);
+	dsi_closesession_reply(server);
 }
 
 void dsi_incoming_tickle(struct afp_server * server) 
@@ -922,7 +936,7 @@ struct dsi_request * dsi_find_request(struct afp_server *server,
 
 	return NULL;
 }
-static int error_count = 0;
+
 int dsi_recv(struct afp_server * server) 
 {
 	struct dsi_header * header = (void *) server->incoming_buffer;
@@ -936,14 +950,8 @@ int dsi_recv(struct afp_server * server)
 		#ifdef DEBUG_DSI
 		printf("<<< read() for dsi, %d bytes\n",amount_to_read);
 		#endif
-		ret = readt(server->fd,server->incoming_buffer+server->data_read,
+		ret = read(server->fd,server->incoming_buffer+server->data_read,
 			amount_to_read);
-		error_count++;
-		//if(error_count%100==0){
-		//	printf("error_count:%d\n",error_count);
-		//}
-
-		//if (ret<0||error_count%201==0) {
 		if (ret<0) {
 			perror("dsi_recv");
 			goto error;
@@ -997,7 +1005,7 @@ gotenough:
 		#ifdef DEBUG_DSI
 		printf("<<< read() in response to a request, %d bytes\n",newmax);
 		#endif
-		ret = readt(server->fd,buf->data+buf->size,
+		ret = read(server->fd,buf->data+buf->size,
 			newmax);
 		if (ret<0) {
 			goto error;
@@ -1035,6 +1043,7 @@ gotenough:
 			server->data_read=size_to_copy;
 			free(tmpbuf);
 		} else return 0;
+
 	} else {
 		/* Okay, so it isn't a response to an afpRead or afpReadExt */
 
@@ -1042,11 +1051,11 @@ gotenough:
 			(ntohl(header->length)==0))) 
 				goto process_packet;
 
-		amount_to_read=min(ntohl(header->length),server->bufsize);
+		amount_to_read=min(sizeof(struct dsi_header)+ntohl(header->length)-server->data_read,server->bufsize);
 		#ifdef DEBUG_DSI
 		printf("<<< read() of rest of AFP, %d bytes\n",amount_to_read);
 		#endif
-		ret = readt(server->fd, (void *)
+		ret = read(server->fd, (void *)
 		(((unsigned int) server->incoming_buffer)+server->data_read),
 			amount_to_read);
 		if (ret<0){
@@ -1075,7 +1084,7 @@ process_packet:
 	switch (header->command) {
 
 	case DSI_DSICloseSession:
-		//dsi_incoming_closesession(server);
+		dsi_incoming_closesession(server);
 		break;
 	case DSI_DSIGetStatus:
 		dsi_getstatus_reply(server);
@@ -1089,9 +1098,7 @@ process_packet:
 	case DSI_DSIWrite:
 	case DSI_DSICommand:
 		if (!runt_packet) 
-		if(dsi_command_reply(server, request->subcommand,request->other)==-1){
-			goto error;
-		}
+		dsi_command_reply(server, request->subcommand,request->other);
 		break;
 	case DSI_DSIAttention:
 		{
@@ -1100,7 +1107,7 @@ process_packet:
 				server->incoming_buffer,
 				server->data_read);
 			server->attention_len=server->data_read;
-			pthread_create(&thread,NULL,
+			my_pthread_create(&thread,NULL,
 				dsi_incoming_attention,server);
 		}
 		break;
@@ -1153,11 +1160,13 @@ out:
 			afp_get_command_name(request->subcommand));
 		#endif
 		if (request->wait) {
+			pthread_mutex_lock(&request->mutex);
 			#ifdef DEBUG_DSI
 			printf("<<< Signalling %d, returning %d or %d\n",request->requestid,request->return_code,rc);
 			#endif
 			request->wait=0;
 			pthread_cond_signal(&request->condition_cond);
+			pthread_mutex_unlock(&request->mutex);
 		} else {
 			dsi_remove_from_request_queue(server,request);
 		}

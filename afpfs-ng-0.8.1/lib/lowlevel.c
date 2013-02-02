@@ -382,11 +382,13 @@ try_again:
 		break;
 	case kFPParamErr:
 	case -ETIMEDOUT:
+		afp_closefork(volume,fp->forkid);
 		ret = ll_open(volume,NULL,fp->flags,fp);
 		if(ret == 0){
 			goto try_again;
 		}else{
-			return ret;
+			ret=EACCES;
+			goto error;
 		}
 	}
 
@@ -796,11 +798,13 @@ try_again:
 			goto error;
 		case kFPParamErr:
 		case -ETIMEDOUT:
+			afp_closefork(volume,fp->forkid);
 			ret = ll_open(volume,NULL,fp->flags,fp);
-			if(ret == 0){
+			if(ret == 0 ){
 				goto try_again;
 			}else{
-				return ret;
+				err=EACCES;
+				goto error;
 			}
 		}
 		o+=sizetowrite;

@@ -494,10 +494,10 @@ int afp_writeext(struct afp_volume * volume, unsigned short forkid,
 	request_packet->forkid=htons(forkid);
 	request_packet->offset=hton64(offset);
 	request_packet->reqcount=hton64(reqcount);
-	printf("writeext_packet.command : %d \t", afpWriteExt);
-	printf("forkid : %d \t", forkid);
-	printf("offset : %" PRIu64 "\t", offset);
-	printf("reqcount : %" PRIu64 "\n", reqcount);
+	//printf("writeext_packet.command : %d \t", afpWriteExt);
+	//printf("forkid : %d \t", forkid);
+	//printf("offset : %" PRIu64 "\t", offset);
+	//printf("reqcount : %" PRIu64 "\n", reqcount);
 	ret=dsi_send(server, (char *) request_packet,len,DSI_DEFAULT_TIMEOUT, 
 		afpWriteExt,(void *) written);
 

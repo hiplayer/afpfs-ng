@@ -28,7 +28,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-
 #include "afp_protocol.h"
 #include "libafpclient.h"
 #include "server.h"
@@ -253,8 +252,61 @@ int afp_unmount_all_volumes(struct afp_server * server)
 	return 0;
 }
 
+int afp_unmount_volume_remote(struct afp_volume * volume)
+{
+	struct afp_server * server;
+	unsigned char emergency=0;
+
+	if (volume==NULL)
+		return -1;
+
+	if (volume->mounted != AFP_VOLUME_MOUNTED) {
+		return -1;
+	}
+	volume->mounted=AFP_VOLUME_UNMOUNTING;
+
+	server=volume->server;
+
+	/* close the volume */
+
+	afp_flush(volume);
+
+	if (afp_volclose(volume)!=kFPNoErr) emergency=1;
+	remove_fork_list(volume);
+	if (volume->dtrefnum) afp_closedt(server,volume->dtrefnum);
+	volume->dtrefnum=0;
+
+	return 0;
+}
+
+int afp_unmount_volume_local(struct afp_volume * volume)
+{
+	struct afp_server * server;
+
+	if (volume==NULL)
+		return -1;
+
+	volume->mounted=AFP_VOLUME_UNMOUNTED;
+
+	free_entire_did_cache(volume);
+
+	if (libafpclient->unmount_volume)
+		libafpclient->unmount_volume(volume);
+
+	/* Figure out if this is the last volume of the server */
+
+	if (something_is_mounted(server)) return 0;
+
+	return -1;
+}
 
 int afp_unmount_volume(struct afp_volume * volume)
+{
+	afp_unmount_volume_remote(volume);
+	return afp_unmount_volume_local(volume);
+}
+
+int afp_unmount_volume_ex(struct afp_volume * volume)
 {
 
 	struct afp_server * server;
@@ -289,15 +341,9 @@ int afp_unmount_volume(struct afp_volume * volume)
 
 	if (something_is_mounted(server)) return 0;
 
-	/* Logout */
-	afp_logout(server,DSI_DONT_WAIT /* don't wait */);
-
-	afp_server_remove(server);
-
 	return -1;
 
 }
-
 
 void afp_free_server(struct afp_server ** sp)
 {
@@ -331,13 +377,62 @@ void afp_free_server(struct afp_server ** sp)
 	*sp=NULL;
 }
 
-int afp_server_remove(struct afp_server *s) 
+int afp_server_remove_remote(struct afp_server *s) 
+{
+	/* Logout */
+	if(s->connect_state==SERVER_STATE_CONNECTED){
+		afp_logout(s,DSI_FAST_TIMEOUT);
+		dsi_closesession_request(s);
+	}
+}
+
+int afp_server_remove_local(struct afp_server *s) 
+{
+	
+	struct dsi_request * p;
+	struct afp_server *s2;
+
+	for (p=s->command_requests;p;p=p->next) {
+		pthread_cond_signal(&p->condition_cond);
+	}
+	if (s==server_base) {
+		server_base=s->next;
+		afp_free_server(&s);
+		goto out;
+	}
+
+	for (s2=server_base;s2;s2=s2->next) {
+		if (s==s2->next) {
+			s2->next=s->next;
+			afp_free_server(&s);
+			goto out;
+		}
+	}
+	return -1;
+out:
+	return 0;
+
+}
+
+int afp_server_remove(struct afp_server *s)
+{
+	afp_server_remove_remote(s); 
+	return afp_server_remove_local(s);
+}
+
+int afp_server_remove_ex(struct afp_server *s) 
 {
 	
 	struct dsi_request * p;
 	struct afp_server *s2;
 	for (p=s->command_requests;p;p=p->next) {
 		pthread_cond_signal(&p->condition_cond);
+	}
+	/* Logout */
+
+	if(s->connect_state==SERVER_STATE_CONNECTED){
+		afp_logout(s,DSI_FAST_TIMEOUT);
+		dsi_closesession_request(s);
 	}
 
 	if (s==server_base) {
@@ -441,6 +536,7 @@ int afp_server_login(struct afp_server *server,
 	char * mesg, unsigned int *l, unsigned int max) 
 {
 	int rc;
+	dsi_opensession(server);
 
 	rc=afp_dologin(server,server->using_uam,
 		server->username,server->password);
@@ -483,6 +579,10 @@ int afp_server_login(struct afp_server *server,
 		*l+=snprintf(mesg,max-*l,
 			"Authentication failed\n");
 		goto error;
+	case kFPNoMoreSessions:
+		*l+=snprintf(mesg,max-*l,
+			"Server cannot handle additional sessions.\n");
+		goto error;
 	case 0: break;
 	default:
 		*l+=snprintf(mesg,max-*l,
@@ -490,8 +590,22 @@ int afp_server_login(struct afp_server *server,
 		goto error;
 	}
 
+	if (server->flags & kSupportsReconnect) {
+		/* Get the session */
+
+		if (server->need_resume) {
+			server->need_resume=0;
+			afp_disconnectoldsession(server,0,&server->token);
+			setup_token(server);
+		} else {
+			setup_token(server);
+		}
+	}
+
 	return 0;
 error:
+	afp_server_remove_remote(server);
+	trigger_exit();
 	return 1;
 }
 
@@ -588,14 +702,6 @@ int afp_connect_volume(struct afp_volume * volume, struct afp_server * server,
 	}
 	
 	volume->mounted=AFP_VOLUME_MOUNTED;
-	/* Get the session */
-
-	if (server->need_resume) {
-		resume_token(server); 
-		server->need_resume=0;
-	} else {
-		setup_token(server);
-	}
 
 	return 0;
 error:
@@ -614,25 +720,21 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
 			s->server_name_printable);
                 return 1;
         }
-/*
-	dsi_closesession_request(s);
-
-	dsi_closesession_reply(s);
-*/
-
-        dsi_opensession(s);
 
 	if(afp_server_login(s,mesg,l,max)) return 1;
 
          for (i=0;i<s->num_volumes;i++) {
                 v=&s->volumes[i];
                 if (strlen(v->mountpoint)) {
-			if (afp_connect_volume(v,v->server,mesg,l,max))
+			if (afp_connect_volume(v,v->server,mesg,l,max)){
 				*l+=snprintf(mesg,max-*l,
                                         "Could not mount %s\n",
 					v->volume_name_printable);
+				return 1;
+			}
                 }
         }
+
 	printf("afp_server_reconnect end\n");
 
         return 0;
@@ -642,8 +744,9 @@ int afp_server_try_reconnect(struct afp_server * server){
 	char mesg[1024]={0};
 	unsigned int l=0; 
 	int ret = 0;
+	int times = 0;
 	/* Try and reconnect */
-	while(1){
+	while(times < DSI_RETRY_TIMES){
 		ret = afp_server_reconnect(server,mesg,&l,1024);
 		if(ret == 1){
 			loop_disconnect(server);
@@ -651,8 +754,9 @@ int afp_server_try_reconnect(struct afp_server * server){
 		}else{
 			break;
 		}
+		times++;
 	}
-	return ret;
+	return -1;
 }
 
 int connect_nonb(int sockfd, struct sockaddr * saptr, socklen_t salen, int nsec)  
@@ -706,23 +810,24 @@ int afp_server_connect(struct afp_server *server, int full)
 		goto error;
 	}
 
+	if (connect(server->fd,(struct sockaddr *) &server->address,sizeof(server->address)) < 0) {
+		error = errno;
+		goto error;
+	}
+
 	int flags = fcntl (server->fd, F_GETFL, 0);
 	fcntl (server->fd, F_SETFL, flags | O_NONBLOCK);
 	int one = 1;
 	setsockopt(server->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-	if (connect_nonb(server->fd,(struct sockaddr *) &server->address,sizeof(server->address),1) < 0) {
-		error = errno;
-		goto error;
-	}
-
 	server->exit_flag=0;
-	server->lastrequestid=65535;
+	server->lastrequestid=0;
 	server->connect_state=SERVER_STATE_CONNECTED;
 
 	add_server(server);
 
 	add_fd_and_signal(server->fd);
+
 	if (!full) {
 		return 0;
 	}

@@ -446,7 +446,6 @@ int ml_read(struct afp_volume * volume, const char *path,
 		if (ret==1) return amount_copied;
 		
 	}
-//	printf("size=%d\n",size);
 
 	read_buf    = buf;
 	read_offset = offset;

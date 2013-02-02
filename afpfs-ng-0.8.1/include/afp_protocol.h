@@ -226,6 +226,7 @@ enum {
 #define kFPNoErr 0
 
 /* AFP result codes, p252 */
+#define kFPNoMoreSessions -1068
 #define kASPSessClosed -1072
 #define kFPAccessDenied -5000
 #define kFPAuthContinue -5001

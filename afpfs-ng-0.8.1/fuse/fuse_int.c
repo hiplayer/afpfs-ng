@@ -289,7 +289,7 @@ static int fuse_read(const char *path, char *buf, size_t size, off_t offset,
 		fp=(void *) fi->fh;
 		ret = ml_read(volume,path,buf+amount_read,size,offset,fp,&eof);
 		if(ret<0){
-			printf("ret=%d\n",ret);
+			printf("%s,%d:ret=%d\n",__FUNCTION__,__LINE__,ret);
 			goto error;
 		}
 		amount_read+=ret;

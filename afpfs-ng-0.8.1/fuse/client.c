@@ -396,13 +396,9 @@ static int do_get_volumes_new(int argc, char ** argv)
 	unsigned int uam_mask=default_uams_mask();
 
 	struct option long_options[] = {
-		{"afpversion",1,0,'v'},
-		{"volumepassword",1,0,'V'},
 		{"user",1,0,'u'},
 		{"pass",1,0,'p'},
 		{"port",1,0,'o'},
-		{"uam",1,0,'a'},
-		{"map",1,0,'m'},
 		{0,0,0,0},
 	};
 
@@ -421,20 +417,13 @@ static int do_get_volumes_new(int argc, char ** argv)
 
         while(1) {
 		optnum++;
-                c = getopt_long(argc,argv,"a:u:m:o:p:v:V:",
+                c = getopt_long(argc,argv,"u:o:p:",
                         long_options,&option_index);
                 if (c==-1) break;
                 switch(c) {
-                case 'a':
+                case 'u':
 			if (strcmp(optarg,"guest")==0) 
 				uam_mask=UAM_NOUSERAUTHENT;
-			else
-				uam_mask=uam_string_to_bitmap(optarg);
-                        break;
-                case 'm':
-			req->map=map_string_to_num(optarg);
-                        break;
-                case 'u':
                         snprintf(req->url.username,AFP_MAX_USERNAME_LEN,"%s",optarg);
                         break;
                 case 'o':
@@ -443,12 +432,6 @@ static int do_get_volumes_new(int argc, char ** argv)
                 case 'p':
                         snprintf(req->url.password,AFP_MAX_PASSWORD_LEN,"%s",optarg);
                         break;
-                case 'V':
-                        snprintf(req->url.volpassword,9,"%s",optarg);
-                        break;
-                case 'v':
-                        req->url.requested_version=strtol(optarg,NULL,10);
-                        break;
                 }
         }
 
@@ -456,11 +439,6 @@ static int do_get_volumes_new(int argc, char ** argv)
 		char *p = getpass("AFP Password: ");
 		if (p)
 			snprintf(req->url.password,AFP_MAX_PASSWORD_LEN,"%s",p);
-	}
-	if (strcmp(req->url.volpassword, "-") == 0) {
-		char *p = getpass("Password for volume: ");
-		if (p)
-			snprintf(req->url.volpassword,9,"%s",p);
 	}
 
 	optnum=optind+1;
@@ -671,7 +649,7 @@ void kill_afpfsd(){
 	read(fd,buf,sizeof(buf));
 	pid = atoi(buf);
 	if(pid > 0){
-		kill(pid,SIGKILL);
+		kill(pid,SIGTERM);
 	}
 }
 
@@ -689,7 +667,7 @@ int read_answer(int sock) {
 	FD_ZERO(&rds);
 	FD_SET(sock,&rds);
 	while (1) {
-		tv.tv_sec=3; tv.tv_usec=0;
+		tv.tv_sec=30; tv.tv_usec=0;
 		ords=rds;
 		ret=select(sock+1,&ords,NULL,NULL,&tv);
 		if (ret==0) {

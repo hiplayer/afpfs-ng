@@ -212,3 +212,18 @@ int invalid_filename(struct afp_server * server, const char * filename)
 
 }
 
+int my_pthread_create (pthread_t *__newthread,
+			   pthread_attr_t *__attr,
+			   void *(*__start_routine)(void *),
+			   void *__arg)
+{
+	int rc = 0;
+	pthread_attr_t myattr;
+	pthread_attr_init (&myattr);
+	pthread_attr_setdetachstate (&myattr, PTHREAD_CREATE_DETACHED);
+	rc = pthread_create(__newthread,(__attr==NULL)?&myattr:__attr,
+			__start_routine,__arg);
+	pthread_attr_destroy (&myattr);
+	return rc;
+}
+

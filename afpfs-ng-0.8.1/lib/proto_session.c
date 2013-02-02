@@ -106,6 +106,7 @@ int afp_getsessiontoken_reply(struct afp_server *server, char *buf,
 	if (token) {
 		memcpy(token->data,token_data,token_len);
 		token->length=token_len;
+		server->need_resume=1;
 	}
 
 	return 0;
@@ -127,7 +128,7 @@ int afp_disconnectoldsession(struct afp_server * server, int type,
 	if ((request=malloc(sizeof(*request) + AFP_TOKEN_MAX_LEN))==NULL)
 		return -1;
 
-	token_data  = (char *) (((unsigned int) request)+sizeof(*request));
+	token_data  = (char *) ((char *)request+sizeof(*request));
 
 	request->type=htons(type);
 
@@ -141,6 +142,7 @@ int afp_disconnectoldsession(struct afp_server * server, int type,
 	ret = dsi_send(server, (char *)request, 
 		sizeof(*request) + token->length,
 		DSI_DEFAULT_TIMEOUT, afpDisconnectOldSession, NULL);
+	printf("%s:%d, ret=%d\n", __FUNCTION__, __LINE__, ret);
 
 	free(request);
 

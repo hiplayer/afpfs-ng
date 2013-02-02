@@ -53,13 +53,24 @@ void fuse_forced_ending_hook(void)
 	int i;
 
 	for (s=get_server_base();s;s=s->next) {
-		if (s->connect_state==SERVER_STATE_CONNECTED)
-		for (i=0;i<s->num_volumes;i++) {
-			volume=&s->volumes[i];
-			if (volume->mounted==AFP_VOLUME_MOUNTED)
-				log_for_client(NULL,AFPFSD,LOG_NOTICE,
-					"Unmounting %s\n",volume->mountpoint);
-			afp_unmount_volume(volume);
+		if (s->connect_state==SERVER_STATE_CONNECTED){
+			for (i=0;i<s->num_volumes;i++) {
+				volume=&s->volumes[i];
+				if (volume->mounted==AFP_VOLUME_MOUNTED)
+					log_for_client(NULL,AFPFSD,LOG_NOTICE,
+							"Unmounting %s\n remote",volume->mountpoint);
+				afp_unmount_volume_remote(volume);
+			}
+			afp_server_remove_remote(s);
+
+			for (i=0;i<s->num_volumes;i++) {
+				volume=&s->volumes[i];
+				if (volume->mounted==AFP_VOLUME_MOUNTED)
+					log_for_client(NULL,AFPFSD,LOG_NOTICE,
+							"Unmounting %s\n local",volume->mountpoint);
+				afp_unmount_volume_local(volume);
+			}
+			afp_server_remove_local(s);
 		}
 	}
 }
@@ -234,6 +245,7 @@ int main(int argc, char *argv[]) {
 	int c;
 	int optnum;
 	int command_fd=-1;
+
 	fuse_register_afpclient();
 
 	if (init_uams()<0) return -1;
