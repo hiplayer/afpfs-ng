@@ -411,7 +411,7 @@ static int do_get_volumes_new(int argc, char ** argv)
 	req = (void *) outgoing_buffer+1;
 	memset(outgoing_buffer,0,outgoing_len);
 	outgoing_buffer[0]=AFP_SERVER_COMMAND_GET_VOLUMES;
-	req->changeuid=changeuid;
+	req->changeuid=0;
 	req->url.port=548;
 	req->map=AFP_MAPPING_UNKNOWN;
 

@@ -132,7 +132,7 @@ int afp_getsrvrmsg(struct afp_server *server, unsigned short messagetype,
 	afp_getsrvrmsg_request.messagebitmap=
 		htons( AFP_GETSRVRMSG_GETMSG | (utf8 ? AFP_GETSRVRMSG_UTF8:0)); 
 		/* Get the message, and yes, we support UTF8 */
-	rc=dsi_send(server, (char *) &afp_getsrvrmsg_request,
+	rc=dsi_send_sys(server, (char *) &afp_getsrvrmsg_request,
 		sizeof(afp_getsrvrmsg_request),block,afpGetSrvrMsg,(void *) mesg);
 
 	return rc;

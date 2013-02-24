@@ -71,7 +71,7 @@ int afp_getsessiontoken(struct afp_server * server, int type,
 	request->command = afpGetSessionToken;
 	memcpy(data,outgoing_token->data,datalen);
 
-	ret = dsi_send(server, (char *)request, 
+	ret = dsi_send_sys(server, (char *)request, 
 		sizeof(*request) + datalen + timelen,
 		DSI_DEFAULT_TIMEOUT, afpGetSessionToken, 
 		(void *) incoming_token);
@@ -139,10 +139,9 @@ int afp_disconnectoldsession(struct afp_server * server, int type,
 	request->idlength=htonl(token->length);
 	memcpy(token_data,token->data,token->length);
 
-	ret = dsi_send(server, (char *)request, 
+	ret = dsi_send_sys(server, (char *)request, 
 		sizeof(*request) + token->length,
 		DSI_DEFAULT_TIMEOUT, afpDisconnectOldSession, NULL);
-	printf("%s:%d, ret=%d\n", __FUNCTION__, __LINE__, ret);
 
 	free(request);
 

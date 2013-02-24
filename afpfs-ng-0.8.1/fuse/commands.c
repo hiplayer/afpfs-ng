@@ -49,7 +49,7 @@ struct afp_volume * global_volume;
 
 static int volopen(struct fuse_client * c, struct afp_volume * volume);
 static int process_command(struct fuse_client * c);
-static struct afp_volume * mount_volume(struct fuse_client * c,
+static int mount_volume(struct afp_volume **volume,struct fuse_client * c,
 	struct afp_server * server, char * volname, char * volpassword) ;
 
 void fuse_set_log_method(int new_method)
@@ -370,7 +370,7 @@ static unsigned char process_ping(struct fuse_client * c)
 	return AFP_SERVER_RESULT_OKAY;
 }
 
-static unsigned char process_get_volumes(struct fuse_client * c)
+static unsigned char process_get_volumes(struct fuse_client * c,int *exit)
 {
 	struct afp_server_mount_request * req;
 	struct afp_server  * s=NULL;
@@ -426,24 +426,22 @@ static unsigned char process_get_volumes(struct fuse_client * c)
 	fclose(fp);
 
 	if ((s) && (!something_is_mounted(s))) {
-		afp_server_remove(s);
+		*exit = 1;
 	}
-	signal_main_thread();
-	return 0;
+	return AFP_SERVER_RESULT_OKAY;
 
 error:
 	if ((s) && (!something_is_mounted(s))) {
-		afp_server_remove(s);
+		*exit = 1;
 	}
-	signal_main_thread();
 	return AFP_SERVER_RESULT_ERROR;
 }
 
-static unsigned char process_exit(struct fuse_client * c)
+static unsigned char process_exit(struct fuse_client * c,int *exit)
 {
 	log_for_client((void *)c,AFPFSD,LOG_INFO,
 		"Exiting\n");
-	trigger_exit();
+	*exit = 1;
 	return AFP_SERVER_RESULT_OKAY;
 }
 
@@ -500,7 +498,7 @@ static unsigned char process_alive(struct fuse_client * c)
 
 
 
-static int process_mount(struct fuse_client * c)
+static int process_mount(struct fuse_client * c,int *exit)
 {
 	struct afp_server_mount_request * req;
 	struct afp_server  * s=NULL;
@@ -555,9 +553,17 @@ static int process_mount(struct fuse_client * c)
 		goto error;
 	}
 	
-	if ((volume=mount_volume(c,s,req->url.volumename,
-		req->url.volpassword))==NULL) {
-		goto error;
+	ret = mount_volume(&volume,c,s,req->url.volumename,
+		req->url.volpassword);
+	switch(ret){
+		case 0:
+			break;
+		case 1:/*have mounted*/
+			goto ok;
+		case -1:
+			goto error;
+		default:
+			goto error;
 	}
 
 	volume->extra_flags|=req->volume_options;
@@ -618,7 +624,7 @@ static int process_mount(struct fuse_client * c)
 				"Mounting of volume %s of server %s succeeded.\n", 
 					volume->volume_name_printable, 
 					volume->server->server_name_printable);
-			return 0;
+			return AFP_SERVER_RESULT_OKAY;
 		}
 		break;
 		case ETIMEDOUT:
@@ -635,12 +641,15 @@ static int process_mount(struct fuse_client * c)
 		}
 
 	}
+ok:
+	if ((s) && (!something_is_mounted(s))) {
+		*exit = 1;
+	}
 	return AFP_SERVER_RESULT_OKAY;
 error:
 	if ((s) && (!something_is_mounted(s))) {
-		afp_server_remove(s);
+		*exit = 1;
 	}
-	signal_main_thread();
 	return AFP_SERVER_RESULT_ERROR;
 }
 
@@ -652,11 +661,12 @@ static void * process_command_thread(void * other)
 	int ret=0;
 	char tosend[sizeof(struct afp_server_response) + MAX_CLIENT_RESPONSE];
 	struct afp_server_response response;
+	int exit=0;
 
 
 	switch(c->incoming_string[0]) {
 	case AFP_SERVER_COMMAND_MOUNT: 
-		ret=process_mount(c);
+		ret=process_mount(c,&exit);
 		break;
 	case AFP_SERVER_COMMAND_STATUS: 
 		ret=process_status(c);
@@ -677,10 +687,10 @@ static void * process_command_thread(void * other)
 		ret=process_ping(c);
 		break;
 	case AFP_SERVER_COMMAND_GET_VOLUMES:
-		ret=process_get_volumes(c);
+		ret=process_get_volumes(c,&exit);
 		break;
 	case AFP_SERVER_COMMAND_EXIT: 
-		ret=process_exit(c);
+		ret=process_exit(c,&exit);
 		break;
 	default:
 		log_for_client((void *)c,AFPFSD,LOG_ERR,"Unknown command\n");
@@ -695,7 +705,10 @@ static void * process_command_thread(void * other)
 	if (ret<0) {
 		perror("Writing");
 	}
-
+	if(exit){
+		trigger_exit();
+		signal_main_thread();
+	}
 	if ((!c) || (c->fd==0)) return NULL;
 	rm_fd_and_signal(c->fd);
 	close(c->fd);
@@ -729,9 +742,8 @@ out:
 	return 0;
 }
 
-
-static struct afp_volume * mount_volume(struct fuse_client * c,
-	struct afp_server * server, char * volname, char * volpassword) 
+static int mount_volume(struct afp_volume **volume,struct fuse_client * c,
+	struct afp_server * server, char * volname, char * volpassword)
 {
 	struct afp_volume * using_volume;
 
@@ -754,7 +766,7 @@ static struct afp_volume * mount_volume(struct fuse_client * c,
 		log_for_client((void *)c,AFPFSD,LOG_ERR,
 			"Volume %s is already mounted on %s\n",volname,
 			using_volume->mountpoint);
-		goto error;
+		goto mounted;
 	}
 
 	if (using_volume->flags & HasPassword) {
@@ -772,9 +784,15 @@ static struct afp_volume * mount_volume(struct fuse_client * c,
 
 	using_volume->server=server;
 
-	return using_volume;
+	*volume = using_volume;
+
+	return 0;
+mounted:
+	*volume = using_volume;
+	return 1;
 error:
-	return NULL;
+	*volume = NULL;
+	return -1;
 }
 
 

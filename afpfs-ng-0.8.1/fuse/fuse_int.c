@@ -40,6 +40,7 @@
 #include "codepage.h"
 #include "midlevel.h"
 #include "fuse_error.h"
+#include "daemon.h"
 
 /* Uncomment the following line to enable full debugging: */
 /*

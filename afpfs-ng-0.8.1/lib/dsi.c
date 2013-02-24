@@ -98,8 +98,6 @@ writet (int fd, char *buffer, int total)
 	return len;
 }
 
-
-
 static int dsi_remove_from_request_queue(struct afp_server *server,
 	struct dsi_request *toremove);
 
@@ -158,7 +156,7 @@ int dsi_getstatus(struct afp_server * server)
 	rx.size=0;
 	dsi_setup_header(server,&header,DSI_DSIGetStatus);
 	/* We're intentionally ignoring the results */
-	ret=dsi_send(server,(char *) &header,sizeof(struct dsi_header),20,
+	ret=dsi_send_sys(server,(char *) &header,sizeof(struct dsi_header),20,
 		0,(void *) &rx);
 
 	free(rx.data);
@@ -182,7 +180,7 @@ int dsi_closesession_request(struct afp_server *server)
 
 	dsi_setup_header(server,&dsi_closesession_header.dsi_header,DSI_DSICloseSession);
 
-	dsi_send(server,(char *) &dsi_closesession_header,
+	dsi_send_sys(server,(char *) &dsi_closesession_header,
 		sizeof(dsi_closesession_header),DSI_DONT_WAIT,0,NULL);
 	return 0;
 }
@@ -216,9 +214,8 @@ int dsi_opensession(struct afp_server *server)
 	dsi_opensession_header.length=sizeof(unsigned int);
 	dsi_opensession_header.rx_quantum=htonl(server->attention_quantum);
 
-	dsi_send(server,(char *) &dsi_opensession_header,
+	return dsi_send_sys(server,(char *) &dsi_opensession_header,
 		sizeof(dsi_opensession_header),DSI_BLOCK_TIMEOUT,0,NULL);
-	return 0;
 }
 
 static int check_incoming_dsi_message(struct afp_server * server, void * data, int size)
@@ -292,8 +289,6 @@ int dsi_send_buffer(struct afp_server *server, char * msg, int size,int wait,uns
 		if ((errno==EPIPE) || (errno==EBADF)) {
 			/* The server has closed the connection */
 			server->connect_state=SERVER_STATE_DISCONNECTED;
-			return -1;
-
 		}
 		perror("writing to server");
 		pthread_mutex_unlock(&server->send_mutex);
@@ -420,50 +415,97 @@ out:
 	return rc;
 }
 
-int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other){
+void dsi_start_reconnect(struct afp_server *server)
+{
+	pthread_mutex_init(&server->reconnect_mutex,NULL);
+	pthread_cond_init(&server->reconnect_cond,NULL);
+	pthread_mutex_lock(&server->reconnect_mutex);
+	server->reconnect_flag = 1;
+	trigger_reconnect();
+}
+
+int dsi_wait_reconnect(struct afp_server *server)
+{
+	pthread_cond_wait(&server->reconnect_cond,&server->reconnect_mutex);
+	pthread_mutex_unlock(&server->reconnect_mutex);
+	pthread_cond_destroy(&server->reconnect_cond);
+	pthread_mutex_destroy(&server->reconnect_mutex);
+}
+
+int dsi_send_in(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other,int retry_flag)
+{
 	struct dsi_header  *header = (struct dsi_header *) msg;
 	struct dsi_request * new_request = NULL;
 	int rc = 0;
 	int try_times = 0;
+	int send_ok = 0;
+
  	header->length=htonl(size-sizeof(struct dsi_header));
 	if (!server_still_valid(server) || server->fd==0)
 		return -1;
 
 	dsi_dec_header(server,header);
 	afp_wait_for_started_loop();
-	do{
-		try_times++;
-		if (server->connect_state==SERVER_STATE_DISCONNECTED) {
-			if(afp_server_try_reconnect(server)<0) return -1;
-		}
-		dsi_inc_header(server,header);
-		dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
-		rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
-		if(rc<0){
-			server->data_read=0;
-			loop_disconnect(server);
-			continue;
-		}
-		rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
-		if(rc<0||
+retry:
+	try_times++;
+	if (server->reconnect_flag==1) {
+		dsi_wait_reconnect(server);
+	}
+	dsi_inc_header(server,header);
+	dsi_add_request(server,msg,size,wait,subcommand,other,&new_request);
+	rc=dsi_send_buffer(server,msg,size,wait,subcommand,other);
+	if(rc<0) {
+		goto error;
+	}
+	send_ok = 1;
+	rc=dsi_wait_request(server,msg,size,wait,subcommand,other,new_request);
+	if(rc<0||
+		subcommand == afpGetSrvrMsg||
+		subcommand == 0||
 		subcommand == afpLogin||
 		subcommand == afpLogout||
 		subcommand == afpLoginCont||
-		subcommand == afpGetSrvrMsg||
 		subcommand == afpGetSessionToken||
 		subcommand == afpDisconnectOldSession){
-			printf("command:%d\t",header->command);
-			printf("requestid:%d\t",ntohs(header->requestid));
-			printf("subcommand=%25.25s\t",afp_get_command_name(subcommand));
-			printf("rc=%d\n",rc);
-		}
-		if(try_times>=DSI_RETRY_TIMES && rc==-ETIMEDOUT){
-			server->data_read=0;
-			loop_disconnect(server);
-		}
-	}while(rc==-ETIMEDOUT);
+		printf("command:%d\t",header->command);
+		printf("requestid:%d\t",ntohs(header->requestid));
+		printf("subcommand=%25.25s\t",afp_get_command_name(subcommand));
+		printf("rc=%d\n",rc);
+	}
+	if(rc==-ETIMEDOUT) {
+		goto error;
+	}
 
 	return rc;
+error:
+	server->data_read=0;
+	if(subcommand == afpRead || subcommand == afpReadExt){
+		struct afp_rx_buffer * buf;
+		buf = other;
+		buf->size = 0;
+	}
+	if(retry_flag) {
+		if(try_times>=DSI_RETRY_TIMES || send_ok == 0){
+			dsi_start_reconnect(server);
+			loop_disconnect(server);
+		}
+		if(try_times>=DSI_RETRY_TIMES){
+			try_times=0;
+		}
+		goto retry;
+	}
+
+	return rc;
+}
+
+int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other)
+{
+	return dsi_send_in(server,msg,size,wait,subcommand,other,1);
+}
+
+int dsi_send_sys(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other)
+{
+	return dsi_send_in(server,msg,size,wait,subcommand,other,0);
 } 
 
 int dsi_send_ex(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other) 

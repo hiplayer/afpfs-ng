@@ -231,10 +231,11 @@ int something_is_mounted(struct afp_server * server)
 {
 	int i;
 
-
-	for (i=0;i<server->num_volumes;i++) {
-		if (server->volumes[i].mounted != AFP_VOLUME_UNMOUNTED ) 
-			return 1;
+	if(server){
+		for (i=0;i<server->num_volumes;i++) {
+			if (server->volumes[i].mounted != AFP_VOLUME_UNMOUNTED ) 
+				return 1;
+		}
 	}
 	return 0;
 }
@@ -463,6 +464,7 @@ struct afp_server * afp_server_init(struct sockaddr_in * address)
 		return NULL;
 	memset((void *) s, 0, sizeof(*s));
 	s->exit_flag = 0;
+	s->try_times = 0;
 	s->path_encoding=kFPUTF8Name;  /* This is a default */
 	s->next=NULL;
 	s->bufsize=1<<18;
@@ -473,6 +475,7 @@ struct afp_server * afp_server_init(struct sockaddr_in * address)
 	s->attention_len=0;
 
 	s->connect_state=SERVER_STATE_DISCONNECTED;
+	s->reconnect_flag=0;
 	memcpy(&s->address,address,sizeof(*address));
 
 	/* FIXME this shouldn't be set here */
@@ -536,7 +539,9 @@ int afp_server_login(struct afp_server *server,
 	char * mesg, unsigned int *l, unsigned int max) 
 {
 	int rc;
-	dsi_opensession(server);
+	if(dsi_opensession(server)!=0){
+		goto error;
+	}
 
 	rc=afp_dologin(server,server->using_uam,
 		server->username,server->password);
@@ -604,8 +609,7 @@ int afp_server_login(struct afp_server *server,
 
 	return 0;
 error:
-	afp_server_remove_remote(server);
-	trigger_exit();
+
 	return 1;
 }
 
@@ -718,10 +722,10 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
         if (afp_server_connect(s,0))  {
 		*l+=snprintf(mesg,max-*l,"Error resuming connection to %s\n",
 			s->server_name_printable);
-                return 1;
+			goto error;
         }
 
-	if(afp_server_login(s,mesg,l,max)) return 1;
+	if(afp_server_login(s,mesg,l,max)) goto error;
 
          for (i=0;i<s->num_volumes;i++) {
                 v=&s->volumes[i];
@@ -730,33 +734,50 @@ int afp_server_reconnect(struct afp_server * s, char * mesg,
 				*l+=snprintf(mesg,max-*l,
                                         "Could not mount %s\n",
 					v->volume_name_printable);
-				return 1;
+					goto error;
 			}
                 }
         }
 
 	printf("afp_server_reconnect end\n");
-
         return 0;
+error:
+	printf("afp_server_reconnect fail\n");
+	afp_server_remove_remote(s);
+	return 1;
 }
 
 int afp_server_try_reconnect(struct afp_server * server){
 	char mesg[1024]={0};
 	unsigned int l=0; 
 	int ret = 0;
-	int times = 0;
+	int ok = 0;
 	/* Try and reconnect */
-	while(times < DSI_RETRY_TIMES){
+	if(server->reconnect_flag==0) goto out;
+	server->reconnect_flag = 0;
+
+	pthread_mutex_lock(&server->reconnect_mutex);
+	while(server->try_times < DSI_RETRY_TIMES){
+		server->try_times++;
 		ret = afp_server_reconnect(server,mesg,&l,1024);
 		if(ret == 1){
 			loop_disconnect(server);
 			printf("mesg:%s\n",mesg);
 		}else{
+			server->try_times = 0;
+			ok = 1;
 			break;
 		}
-		times++;
 	}
-	return -1;
+	if(ok){
+		pthread_cond_signal(&server->reconnect_cond);
+		ret = 0;
+	}else{
+		ret = -1;
+	}
+	pthread_mutex_unlock(&server->reconnect_mutex);
+out:
+	return ret;
 }
 
 int connect_nonb(int sockfd, struct sockaddr * saptr, socklen_t salen, int nsec)  

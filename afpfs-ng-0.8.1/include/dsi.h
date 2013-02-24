@@ -23,6 +23,7 @@ int dsi_opensession(struct afp_server *server);
 int afp_disconnectoldsession(struct afp_server * server, int type, struct afp_token* token);
 
 int dsi_send(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other);
+int dsi_send_sys(struct afp_server *server, char * msg, int size,int wait,unsigned char subcommand, void ** other);
 struct dsi_session * dsi_create(struct afp_server *server);
 int dsi_restart(struct afp_server *server);
 int dsi_recv(struct afp_server * server);

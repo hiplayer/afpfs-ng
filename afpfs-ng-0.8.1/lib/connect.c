@@ -41,7 +41,29 @@ error:
 	return -1;
 }
 
+int afp_server_get_attention_info(void * priv,struct afp_server **pserver,struct sockaddr_in * address)
+{
+	int ret = 0;
+	
+	if ((*pserver=afp_server_init(address))==NULL) goto error;
 
+	if ((ret=afp_server_connect(*pserver,1))<0) {
+		if (ret==-ETIMEDOUT) {
+			log_for_client(priv,AFPFSD,LOG_ERR,
+				"Could not connect, never got a response to getstatus, %s\n",strerror(-ret));
+		} else {
+			log_for_client(priv,AFPFSD,LOG_ERR,
+				"Could not connect, %s\n",strerror(-ret));
+		}
+		afp_server_remove(*pserver);
+		goto error;
+	}
+	loop_disconnect(*pserver);
+
+	return 0;
+error:
+	return -1;
+}
 
 struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_request *req)
 {
@@ -64,21 +86,10 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 		goto error;
 
 	if ((s=find_server_by_address(&address))) goto have_server;
-
-	if ((tmpserver=afp_server_init(&address))==NULL) goto error;
-
-	if ((ret=afp_server_connect(tmpserver,1))<0) {
-		if (ret==-ETIMEDOUT) {
-			log_for_client(priv,AFPFSD,LOG_ERR,
-				"Could not connect, never got a response to getstatus, %s\n",strerror(-ret));
-		} else {
-			log_for_client(priv,AFPFSD,LOG_ERR,
-				"Could not connect, %s\n",strerror(-ret));
-		}
-		afp_server_remove(tmpserver);
+	
+	if (afp_server_get_attention_info(priv,&tmpserver,&address)<0){
 		goto error;
 	}
-	loop_disconnect(tmpserver);
 
 	memcpy(icon,&tmpserver->icon,AFP_SERVER_ICON_LEN);
 	memcpy(&versions,&tmpserver->versions,SERVER_MAX_VERSIONS);
@@ -108,7 +119,7 @@ struct afp_server * afp_server_full_connect (void * priv, struct afp_connection_
 			goto error;
 		}
 		s->flags=flags;
-		printf("afp_server_complete_connnection\n");
+		printf("afp_server_complete_connnection start\n");
 		if ((afp_server_complete_connection(priv,
 			s,&address,(unsigned char *) &versions,uams,
 			req->url.username, req->url.password, 

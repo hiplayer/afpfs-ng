@@ -228,6 +228,10 @@ struct afp_server {
 
 	void * dsi;
 	unsigned int exit_flag;
+	int reconnect_flag;
+	pthread_mutex_t reconnect_mutex;
+	pthread_cond_t reconnect_cond;
+	int try_times;
 
 	/* Our DSI request queue */
 	pthread_mutex_t requestid_mutex;
@@ -542,5 +546,6 @@ int afp_newcommand76(struct afp_volume * volume, unsigned int dlen, char * data)
 /* For debugging */
 char * afp_get_command_name(char code);
 
+int afp_server_try_reconnect(struct afp_server * server);
 
 #endif

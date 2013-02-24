@@ -23,6 +23,8 @@
 #define SIGNAL_TO_USE SIGUSR2
 
 static unsigned char exit_program=0;
+static int ending=0;
+static unsigned char reconnect_server=0;
 
 static pthread_t ending_thread;
 static pthread_t main_thread = NULL;
@@ -35,8 +37,15 @@ static pthread_mutex_t loop_started_mutex;
 void trigger_exit(void)
 {
 	exit_program=1;
+	ending = 0;
 }
 
+void trigger_reconnect(void)
+{
+	reconnect_server = 1;
+} 
+
+extern const char *const sys_siglist[];
 void termination_handler(int signum)
 {
 	switch (signum) {
@@ -84,7 +93,6 @@ void signal_main_thread(void)
 		pthread_kill(main_thread,SIGNAL_TO_USE);
 }
 
-static int ending=0;
 void * just_end_it_now(void * ignore)
 {
 	if (ending) return;
@@ -149,6 +157,23 @@ static int process_server_fds(fd_set * set, int max_fd, int ** onfd)
 	return 0;
 }
 
+static int process_server_reconnect(){
+
+	struct afp_server * s;
+	pthread_t thread;
+	int ret;
+	s  = get_server_base();
+	for (;s;s=s->next) {
+		if (s->next==s) {
+			s->next=NULL;
+			printf("Danger, recursive loop\n");
+		}
+		if (s->reconnect_flag){
+			ret = my_pthread_create(&thread,NULL,afp_server_try_reconnect,s);
+		}
+	}
+}
+
 static void deal_with_server_signals(fd_set *set, int * max_fd) 
 {
 
@@ -182,13 +207,14 @@ int afp_main_quick_startup(pthread_t * thread)
 	return 0;
 }
 
-
 int afp_main_loop(int command_fd) {
 	fd_set ords, oeds;
 	struct timespec tv;
 	int ret;
 	int fderrors=0;
+	int i;
 	sigset_t sigmask, orig_sigmask;
+	reconnect_server = 0;
 
 	main_thread=pthread_self();
 
@@ -205,6 +231,9 @@ int afp_main_loop(int command_fd) {
 	signal(SIGNAL_TO_USE,termination_handler);
 	signal(SIGTERM,termination_handler);
 	signal(SIGINT,termination_handler);
+	signal(SIGPIPE,SIG_IGN);
+    sighandler_register("abc");
+
 	while(1) {
 
 		ords=rds;
@@ -216,13 +245,19 @@ int afp_main_loop(int command_fd) {
 			tv.tv_sec=0;
 			tv.tv_nsec=0;
 		}
+
 		ret=pselect(max_fd,&ords,NULL,&oeds,&tv,&orig_sigmask);
 			if (exit_program==2) break;
 			if (exit_program==1) {
 				pthread_create(&ending_thread,NULL,just_end_it_now,NULL);
 			}
+			if (reconnect_server==1) {
+				process_server_reconnect();
+				reconnect_server = 0;
+			}
 		if (ret<0) {
-			printf("select done ret:%d\n",ret);
+			printf("select fail\tret:%d      \tmax_fd:%d\t      exit_program:%d\treconnect_server:%d\n",
+				ret,max_fd,exit_program,reconnect_server);
 			switch(errno) {
 			case EINTR:
 				deal_with_server_signals(&rds,&max_fd);
@@ -263,7 +298,8 @@ int afp_main_loop(int command_fd) {
 			}
 		}
 	}
-	pthread_join(&ending_thread,NULL);
+	pthread_join(ending_thread,NULL);
+	printf("%s,%d,mainloop end\n",__FILE__,__LINE__);
 
 error:
 	return -1;

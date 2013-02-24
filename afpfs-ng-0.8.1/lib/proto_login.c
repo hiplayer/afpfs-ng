@@ -27,7 +27,7 @@ int afp_logout(struct afp_server *server, unsigned char wait)
 	dsi_setup_header(server,&request.dsi_header,DSI_DSICommand);
 	request.command=afpLogout;
 	request.pad=0;
-	return dsi_send(server, (char *) &request,sizeof(request),
+	return dsi_send_sys(server, (char *) &request,sizeof(request),
 		wait,afpLogout,NULL);
 }
 
@@ -134,7 +134,7 @@ int afp_login(struct afp_server *server, char * ua_name,
 
 	memcpy(p,userauthinfo,userauthinfo_len);
 
-	ret=dsi_send(server, (char *) msg,len,DSI_BLOCK_TIMEOUT,
+	ret=dsi_send_sys(server, (char *) msg,len,DSI_BLOCK_TIMEOUT,
 		afpLogin, (void *)rx);
 	free(msg);
 	
@@ -171,7 +171,7 @@ int afp_logincont(struct afp_server *server, unsigned short id,
 	request->id = htons(id);
 	memcpy(p, userauthinfo, userauthinfo_len);
 
-	ret = dsi_send(server, (char *)msg, len, DSI_BLOCK_TIMEOUT, 
+	ret = dsi_send_sys(server, (char *)msg, len, DSI_BLOCK_TIMEOUT, 
 		afpLoginCont, (void *)rx);
 	free(msg);
 

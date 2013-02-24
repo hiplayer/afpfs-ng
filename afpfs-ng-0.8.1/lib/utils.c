@@ -7,7 +7,16 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <utime.h>
 #include <stdlib.h>
+#include <getopt.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <signal.h>
+#include <ucontext.h>
+
 #include "afp.h"
 #include "utils.h"
 #include "afp_internal.h"
@@ -227,3 +236,122 @@ int my_pthread_create (pthread_t *__newthread,
 	return rc;
 }
 
+typedef struct { char name[10]; int id; char description[40]; } signal_def;
+ 
+#define FUNCTION_DEPTH  128
+static char *progname = NULL;
+signal_def signal_data[] =
+{
+	{ "SIGHUP", SIGHUP, "Hangup (POSIX)" },
+	{ "SIGINT", SIGINT, "Interrupt (ANSI)" },
+	{ "SIGQUIT", SIGQUIT, "Quit (POSIX)" },
+	{ "SIGILL", SIGILL, "Illegal instruction (ANSI)" },
+	{ "SIGTRAP", SIGTRAP, "Trace trap (POSIX)" },
+	{ "SIGABRT", SIGABRT, "Abort (ANSI)" },
+	{ "SIGIOT", SIGIOT, "IOT trap (4.2 BSD)" },
+	{ "SIGBUS", SIGBUS, "BUS error (4.2 BSD)" },
+	{ "SIGFPE", SIGFPE, "Floating-point exception (ANSI)" },
+	{ "SIGKILL", SIGKILL, "Kill, unblockable (POSIX)" },
+	{ "SIGUSR1", SIGUSR1, "User-defined signal 1 (POSIX)" },
+	{ "SIGSEGV", SIGSEGV, "Segmentation violation (ANSI)" },
+	{ "SIGUSR2", SIGUSR2, "User-defined signal 2 (POSIX)" },
+	{ "SIGPIPE", SIGPIPE, "Broken pipe (POSIX)" },
+	{ "SIGALRM", SIGALRM, "Alarm clock (POSIX)" },
+	{ "SIGTERM", SIGTERM, "Termination (ANSI)" },
+	{ "SIGCHLD", SIGCHLD, "Child status has changed (POSIX)" },
+	{ "SIGCLD", SIGCLD, "Same as SIGCHLD (System V)" },
+	{ "SIGCONT", SIGCONT, "Continue (POSIX)" },
+	{ "SIGSTOP", SIGSTOP, "Stop, unblockable (POSIX)" },
+	{ "SIGTSTP", SIGTSTP, "Keyboard stop (POSIX)" },
+	{ "SIGTTIN", SIGTTIN, "Background read from tty (POSIX)" },
+	{ "SIGTTOU", SIGTTOU, "Background write to tty (POSIX)" },
+	{ "SIGURG", SIGURG, "Urgent condition on socket (4.2 BSD)" },
+	{ "SIGXCPU", SIGXCPU, "CPU limit exceeded (4.2 BSD)" },
+	{ "SIGXFSZ", SIGXFSZ, "File size limit exceeded (4.2 BSD)" },
+	{ "SIGVTALRM", SIGVTALRM, "Virtual alarm clock (4.2 BSD)" },
+	{ "SIGPROF", SIGPROF, "Profiling alarm clock (4.2 BSD)" },
+	{ "SIGWINCH", SIGWINCH, "Window size change (4.3 BSD, Sun)" },
+	{ "SIGIO", SIGIO, "I/O now possible (4.2 BSD)" },
+	{ "SIGPOLL", SIGPOLL, "Pollable event occurred (System V)" },
+	{ "SIGPWR", SIGPWR, "Power failure restart (System V)" },
+	{ "SIGSYS", SIGSYS, "Bad system call" },
+};
+
+static  void    sig_handler(int sig, siginfo_t *info, void *data)
+{
+	ucontext_t *ucontext = (ucontext_t*)data;
+	void   *bt[FUNCTION_DEPTH];
+	char   **messages = (char **)NULL;
+	int    bt_size;
+	int    i;
+#if defined(CONF_BACKTRACE_MIPS32)
+	static unsigned long long pc = 0;
+#endif
+	signal_def *d = NULL;
+
+	for (i = 0; i < sizeof(signal_data) / sizeof(signal_def); i++)
+		if (sig == signal_data[i].id) {
+			d = &signal_data[i];
+			break;
+		}
+	if (d)
+		fprintf(stderr, "\033[1;33m%s: Got signal 0x%02X (%s): %s, try to do backtrace\033[0m\n", 
+		        progname, sig, signal_data[i].name, signal_data[i].description);
+	else
+		fprintf(stderr, "\033[1;33m%s: Got signal 0x%02X, try to do backtrace\033[0m\n", 
+		        progname, sig);
+
+#if defined(CONF_BACKTRACE_MIPS32)
+	if (!pc)
+		pc = ucontext->uc_mcontext.pc;
+	else {
+		if (pc == ucontext->uc_mcontext.pc) {
+			raise(sig);
+		}
+		pc = ucontext->uc_mcontext.pc;
+	}
+
+	bt_size = sigbbacktrace_mips32(bt, FUNCTION_DEPTH, ucontext);
+#elif defined(CONF_BACKTRACE_ARM)
+	//bt_size = sigbacktrace_arm(bt, FUNCTION_DEPTH);
+	bt_size = backtrace(bt, FUNCTION_DEPTH);
+	printf("bt_size=%d\n",bt_size);
+
+
+#else
+	bt_size = backtrace(bt, FUNCTION_DEPTH);
+#endif
+
+	if (bt_size > 0) {
+		messages = backtrace_symbols(bt, bt_size);
+		/* skip first stack frame (points here) */
+		fprintf(stderr, "\033[32;40;1m [backtrace] Execution path:\033[0m\n");
+		for (i = 0; i < bt_size; ++i)
+			fprintf(stderr, "\033[31;40;1m [backtrace] %s\033[0m\n", messages[i]);
+	}
+	fflush(stderr);
+	signal (sig, SIG_DFL);
+	raise (sig);
+}
+
+int sighandler_register(char *filename)
+{
+	struct sigaction sigact;
+	int ret = 0;
+    
+	progname = strdup(filename);
+
+	memset(&sigact, 0, sizeof(sigact));
+
+	sigact.sa_sigaction = sig_handler;
+	sigact.sa_flags = SA_SIGINFO|SA_NOMASK;
+	if((ret = sigaction(SIGSEGV, &sigact, NULL)) < 0) {
+		perror("sigaction");
+		return ret;
+	}
+	if((ret = sigaction(SIGBUS, &sigact, NULL)) < 0) {
+		perror("sigaction");
+		return ret;
+	}
+	return 0;
+}
